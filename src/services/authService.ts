@@ -59,17 +59,31 @@ export const authService = {
       console.log('[AuthService] 👤 Đang lấy thông tin profile...');
       
       const response = await apiClient.get<User>('/auth/profile');
-      
+      const serverUser = response.data;
+
       console.log('[AuthService] ✅ Lấy profile thành công!');
-      console.log('[AuthService] 👨‍💼 User:', response.data.fullname);
-      console.log('[AuthService] 📧 Email:', response.data.email);
-      console.log('[AuthService] 🎭 Roles:', response.data.roles);
+      console.log('[AuthService] 👨‍💼 User:', serverUser.fullname);
+      console.log('[AuthService] 📧 Email:', serverUser.email);
+      console.log('[AuthService] 🎭 Roles:', serverUser.roles);
+
+      // Merge với cache để giữ avatar/coverImage cục bộ nếu có
+      let cachedUser: User | null = null;
+      try {
+        const cached = await AsyncStorage.getItem('userData');
+        cachedUser = cached ? JSON.parse(cached) : null;
+      } catch {}
+
+      const merged: User = {
+        ...serverUser,
+        avatar: cachedUser?.avatar ?? serverUser.avatar,
+        coverImage: cachedUser?.coverImage ?? serverUser.coverImage,
+      };
+
+      // Lưu merged user vào AsyncStorage
+      await AsyncStorage.setItem('userData', JSON.stringify(merged));
+      console.log('[AuthService] 💾 Đã lưu merged user vào AsyncStorage (giữ avatar/cover cục bộ nếu có)');
       
-      // Lưu user data vào AsyncStorage
-      await AsyncStorage.setItem('userData', JSON.stringify(response.data));
-      console.log('[AuthService] 💾 Đã lưu user data vào AsyncStorage');
-      
-      return response.data;
+      return merged;
     } catch (error: any) {
       console.error('[AuthService] ❌ Lỗi lấy profile:', error.message);
       console.error('[AuthService] 📄 Response:', error.response?.data);
@@ -84,13 +98,33 @@ export const authService = {
    */
   logout: async (): Promise<void> => {
     try {
-      await apiClient.post('/auth/logout');
-    } catch (error) {
-      console.error('Logout error:', error);
-    } finally {
-      // Xóa token và user data
+      console.log('[AuthService] 🚪 Đang đăng xuất...');
+      
+      // Gọi API logout (không bắt buộc phải thành công)
+      try {
+        await apiClient.post('/auth/logout');
+        console.log('[AuthService] ✅ API logout thành công');
+      } catch (apiError) {
+        console.warn('[AuthService] ⚠️ API logout lỗi (tiếp tục clear local data):', apiError);
+      }
+      
+      // Xóa token và user data (quan trọng nhất)
       await AsyncStorage.removeItem('access_token');
+      console.log('[AuthService] 🗑️ Đã xóa access_token');
+      
       await AsyncStorage.removeItem('userData');
+      console.log('[AuthService] 🗑️ Đã xóa userData');
+      
+      console.log('[AuthService] ✅ Logout hoàn thành!');
+    } catch (error) {
+      console.error('[AuthService] ❌ Lỗi nghiêm trọng khi logout:', error);
+      // Vẫn cố gắng xóa dữ liệu local
+      try {
+        await AsyncStorage.removeItem('access_token');
+        await AsyncStorage.removeItem('userData');
+      } catch (cleanupError) {
+        console.error('[AuthService] ❌ Không thể xóa local data:', cleanupError);
+      }
     }
   },
 

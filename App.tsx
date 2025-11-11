@@ -9,25 +9,38 @@ import { ActivityIndicator, View, StyleSheet } from 'react-native';
 const Stack = createNativeStackNavigator();
 
 function Navigation() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, user } = useAuth();
 
-  if (isLoading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#3B82F6" />
-      </View>
-    );
-  }
+  console.log('[App/Navigation] 🔄 Re-render');
+  console.log('[App/Navigation] 📊 isAuthenticated:', isAuthenticated);
+  console.log('[App/Navigation] 📊 isLoading:', isLoading);
+  console.log('[App/Navigation] 📊 user:', user?.email || 'null');
+  console.log('[App/Navigation] 🎬 Will show:', isAuthenticated ? 'HomeScreen' : 'LoginScreen');
 
   return (
     <NavigationContainer>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {isAuthenticated ? (
-          <Stack.Screen name="Home" component={HomeScreen} />
+          <Stack.Screen 
+            name="Home" 
+            component={HomeScreen}
+            options={{ animationTypeForReplace: 'pop' }}
+          />
         ) : (
-          <Stack.Screen name="Login" component={LoginScreen} />
+          <Stack.Screen 
+            name="Login" 
+            component={LoginScreen}
+            options={{ animationTypeForReplace: 'push' }}
+          />
         )}
       </Stack.Navigator>
+      
+      {/* Loading overlay khi đang xử lý auth */}
+      {isLoading && (
+        <View style={styles.loadingOverlay}>
+          <ActivityIndicator size="large" color="#3B82F6" />
+        </View>
+      )}
     </NavigationContainer>
   );
 }
@@ -46,5 +59,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
+  },
+  loadingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 9999,
   },
 });

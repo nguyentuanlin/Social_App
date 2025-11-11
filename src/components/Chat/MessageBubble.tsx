@@ -25,6 +25,10 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackPosition, setPlaybackPosition] = useState(0);
   const [playbackDuration, setPlaybackDuration] = useState(0);
+  const transcriptText =
+    typeof metadata?.transcript === 'string'
+      ? metadata.transcript
+      : (metadata?.transcript?.text || '');
 
   // Cleanup sound on unmount
   useEffect(() => {
@@ -161,10 +165,10 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                       </Text>
                     </View>
                   </View>
-                  {metadata?.transcript && (
+                  {transcriptText && (
                     <View style={styles.transcriptBox}>
                       <MaterialIcons name="subtitles" size={14} color="#6B7280" />
-                      <Text style={styles.transcriptText}>{metadata.transcript}</Text>
+                      <Text style={styles.transcriptText}>{transcriptText}</Text>
                     </View>
                   )}
                 </View>
@@ -244,10 +248,10 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                 </Text>
               </View>
             </View>
-            {metadata?.transcript && (
+            {transcriptText && (
               <View style={styles.transcriptBox}>
                 <MaterialIcons name="subtitles" size={14} color="#6B7280" />
-                <Text style={styles.transcriptText}>{metadata.transcript}</Text>
+                <Text style={styles.transcriptText}>{transcriptText}</Text>
               </View>
             )}
           </View>

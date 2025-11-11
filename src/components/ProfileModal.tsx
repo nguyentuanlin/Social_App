@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -9,10 +9,12 @@ import {
   Alert,
   Dimensions,
   Image,
+  Platform,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '../contexts/AuthContext';
+import CustomAlert from './CustomAlert';
 
 const { width } = Dimensions.get('window');
 
@@ -23,50 +25,65 @@ interface ProfileModalProps {
 
 const ProfileModal: React.FC<ProfileModalProps> = ({ visible, onClose }) => {
   const { user, logout } = useAuth();
+  const [confirmVisible, setConfirmVisible] = useState(false);
 
   const handleLogout = () => {
-    Alert.alert(
-      'Đăng xuất',
-      'Bạn có chắc chắn muốn đăng xuất?',
-      [
-        {
-          text: 'Hủy',
-          style: 'cancel',
-        },
-        {
-          text: 'Đăng xuất',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await logout();
-              onClose();
-            } catch (error) {
-              console.error('Logout error:', error);
-              Alert.alert('Lỗi', 'Không thể đăng xuất');
-            }
-          },
-        },
-      ]
-    );
+    console.log('[ProfileModal] 🎯 handleLogout được gọi');
+    console.log('[ProfileModal] 🌐 Platform:', Platform.OS);
+    setConfirmVisible(true);
+  };
+
+  const performLogout = async () => {
+    try {
+      console.log('='.repeat(60));
+      console.log('[ProfileModal] 🚪 User XÁC NHẬN đăng xuất');
+      console.log('[ProfileModal] 📍 Bước 1: Đóng modal...');
+      
+      // Đóng modal trước
+      onClose();
+      console.log('[ProfileModal] ✅ Modal đã gọi onClose()');
+      
+      // Đợi một chút để modal đóng hoàn toàn
+      console.log('[ProfileModal] ⏳ Đợi 300ms...');
+      await new Promise(resolve => setTimeout(resolve, 300));
+      console.log('[ProfileModal] ✅ Đã đợi xong');
+      
+      // Thực hiện logout
+      console.log('[ProfileModal] 📍 Bước 2: Gọi logout()...');
+      console.log('[ProfileModal] 🔍 logout function:', typeof logout);
+      await logout();
+      console.log('[ProfileModal] ✅ Logout hoàn thành');
+      console.log('='.repeat(60));
+    } catch (error) {
+      console.error('[ProfileModal] ❌ Logout error:', error);
+      console.error('[ProfileModal] ❌ Error stack:', error);
+      
+      if (Platform.OS === 'web') {
+        window.alert('Lỗi: Không thể đăng xuất. Vui lòng thử lại.');
+      } else {
+        Alert.alert('Lỗi', 'Không thể đăng xuất. Vui lòng thử lại.');
+      }
+    }
   };
 
   if (!user) return null;
 
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="slide"
-      onRequestClose={onClose}
-    >
-      <View style={styles.overlay}>
-        <TouchableOpacity 
-          style={styles.overlayTouchable}
-          activeOpacity={1} 
-          onPress={onClose}
-        />
-        
-        <View style={styles.modalContainer}>
+    <>
+      <Modal
+        visible={visible}
+        transparent
+        animationType="slide"
+        onRequestClose={onClose}
+      >
+        <View style={styles.overlay}>
+          <TouchableOpacity 
+            style={styles.overlayTouchable}
+            activeOpacity={1} 
+            onPress={onClose}
+          />
+          
+          <View style={styles.modalContainer}>
           {/* Cover Image với Gradient */}
           <View style={styles.coverContainer}>
             {user?.coverImage ? (
@@ -192,7 +209,11 @@ const ProfileModal: React.FC<ProfileModalProps> = ({ visible, onClose }) => {
           <View style={styles.footer}>
             <TouchableOpacity 
               style={styles.logoutButton} 
-              onPress={handleLogout}
+              onPress={() => {
+                console.log('[ProfileModal] 🖱️ NÚT ĐĂNG XUẤT ĐƯỢC CLICK!');
+                console.log('[ProfileModal] 🔍 handleLogout function:', typeof handleLogout);
+                handleLogout();
+              }}
             >
               <LinearGradient
                 colors={['#EF4444', '#DC2626']}
@@ -207,7 +228,27 @@ const ProfileModal: React.FC<ProfileModalProps> = ({ visible, onClose }) => {
           </View>
         </View>
       </View>
-    </Modal>
+      </Modal>
+
+      {/* Custom confirm dialog */}
+      <CustomAlert
+        visible={confirmVisible}
+        title="Đăng xuất"
+        message="Bạn có chắc chắn muốn đăng xuất?"
+        confirmText="Đăng xuất"
+        cancelText="Hủy"
+        type="danger"
+        onCancel={() => {
+          console.log('[ProfileModal] ❌ User hủy đăng xuất (custom)');
+          setConfirmVisible(false);
+        }}
+        onConfirm={async () => {
+          console.log('[ProfileModal] ✅ User xác nhận đăng xuất (custom)');
+          setConfirmVisible(false);
+          await performLogout();
+        }}
+      />
+    </>
   );
 };
 
