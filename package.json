@@ -1,0 +1,45 @@
+{
+  "name": "social-app",
+  "version": "1.0.0",
+  "main": "expo/AppEntry.js",
+  "scripts": {
+    "start": "expo start --port 3001",
+    "android": "expo start --android --port 3001",
+    "ios": "expo start --ios --port 3001",
+    "web": "expo start --web --port 3001"
+  },
+  "dependencies": {
+    "@expo/metro-runtime": "~4.0.0",
+    "@expo/vector-icons": "^14.0.3",
+    "@react-native-async-storage/async-storage": "^2.0.0",
+    "@react-navigation/native": "^6.1.9",
+    "@react-navigation/native-stack": "^6.9.17",
+    "axios": "^1.6.2",
+    "expo": "~54.0.0",
+    "expo-auth-session": "~6.0.2",
+    "expo-av": "~15.0.1",
+    "expo-crypto": "~14.0.1",
+    "expo-dev-client": "~6.0.17",
+    "expo-document-picker": "~13.0.1",
+    "expo-image-picker": "~16.0.3",
+    "expo-linear-gradient": "~14.0.1",
+    "expo-status-bar": "~2.0.0",
+    "expo-web-browser": "~14.0.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-native": "0.76.5",
+    "react-native-chart-kit": "^6.12.0",
+    "react-native-safe-area-context": "~5.0.0",
+    "react-native-screens": "~4.4.0",
+    "react-native-svg": "^15.8.0",
+    "react-native-vector-icons": "^10.0.3",
+    "react-native-web": "~0.19.13"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.20.0",
+    "@types/react": "~18.2.45",
+    "babel-plugin-module-resolver": "^5.0.2",
+    "typescript": "~5.3.3"
+  },
+  "private": true
+}
