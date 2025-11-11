@@ -9,7 +9,8 @@
     "scheme": "socialapp",
     "newArchEnabled": false,
     "plugins": [
-      "expo-dev-client"
+      "expo-dev-client",
+      "expo-asset"
     ],
     "splash": {
       "image": "./assets/splash.png",
@@ -22,19 +23,16 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.tll.socialapp",
-      "newArchEnabled": false
+      "newArchEnabled": false,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
-      },
       "package": "com.tll.socialapp",
       "newArchEnabled": false
     },
-    "web": {
-      "favicon": "./assets/favicon.png"
-    },
+    "web": {},
     "extra": {
       "eas": {
         "projectId": "fc471311-b7e2-49c0-9223-5a79bb65667c"
