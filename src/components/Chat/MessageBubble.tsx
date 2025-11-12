@@ -31,6 +31,20 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
       : (metadata?.transcript?.text || '');
 
   // Cleanup sound on unmount
+  // Compute readable text color for label background
+  const getTextColorForBg = (hex: string) => {
+    const c = hex?.replace('#', '');
+    if (c?.length === 6) {
+      const r = parseInt(c.slice(0, 2), 16);
+      const g = parseInt(c.slice(2, 4), 16);
+      const b = parseInt(c.slice(4, 6), 16);
+      const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      return lum > 180 ? '#111827' : '#FFFFFF';
+    }
+    return '#FFFFFF';
+  };
+
+  // Cleanup sound on unmount
   useEffect(() => {
     return () => {
       if (sound) {
@@ -306,6 +320,42 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
         ]}
       >
         {renderContent()}
+
+        {Array.isArray(metadata?.__labels) && metadata.__labels.length > 0 && (
+          <View
+            style={[
+              styles.labelRow,
+              isFromCustomer ? styles.labelRowCustomer : styles.labelRowAgent,
+            ]}
+          >
+            {metadata.__labels.map((ml: any, idx: number) => {
+              const label = ml.label || {};
+              const bg = label.color || '#6B7280';
+              const textColor = getTextColorForBg(bg);
+              return (
+                <View
+                  key={idx}
+                  style={{
+                    backgroundColor: bg,
+                    borderRadius: 4,
+                    paddingHorizontal: 8,
+                    paddingVertical: 2,
+                    minHeight: 20,
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    borderWidth: 1,
+                    borderColor: 'rgba(0,0,0,0.08)'
+                  }}
+                >
+                  <Text style={{ color: textColor, fontSize: 11, fontWeight: '600' }}>
+                    {label.name || ml.labelId}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+        )}
+
         <Text
           style={[
             styles.messageTime,
@@ -341,6 +391,22 @@ const styles = StyleSheet.create({
   messageBubbleAgent: {
     backgroundColor: '#3B82F6',
     borderBottomRightRadius: 4,
+  },
+  labelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 6,
+    paddingTop: 6,
+  },
+  labelRowCustomer: {
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
+  },
+  labelRowAgent: {
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.25)',
   },
   messageText: {
     fontSize: 15,

@@ -14,6 +14,7 @@ import {
 import { MaterialIcons, FontAwesome, FontAwesome5, Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { chatApi, Conversation, Message } from '../services/apiChat';
+import { apiLabel, MessageLabel as MsgLabel, TopLabel } from '../services/apiLabel';
 import ChatInputBar from '../components/Chat/ChatInputBar';
 import MessageBubble from '../components/Chat/MessageBubble';
 import ConversationItem from '../components/Chat/ConversationItem';
@@ -36,6 +37,45 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
   const [error, setError] = useState<string | null>(null);
   const [profileModalVisible, setProfileModalVisible] = useState(false);
   const flatListRef = React.useRef<FlatList>(null);
+  const [topLabelsMap, setTopLabelsMap] = useState<Record<string, TopLabel[]>>({});
+  const [messageLabelsMap, setMessageLabelsMap] = useState<Record<string, MsgLabel[]>>({});
+  const [convExtraLabelsMap, setConvExtraLabelsMap] = useState<Record<string, number>>({});
+
+  // Utilities for contrast color
+  const getTextColorForBg = (hex: string) => {
+    const c = hex?.replace('#', '');
+    if (c?.length === 6) {
+      const r = parseInt(c.slice(0, 2), 16);
+      const g = parseInt(c.slice(2, 4), 16);
+      const b = parseInt(c.slice(4, 6), 16);
+      // Relative luminance
+      const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      return lum > 180 ? '#111827' : '#FFFFFF';
+    }
+    return '#FFFFFF';
+  };
+
+  // Simple label chip for reuse (inline styles to avoid RN TS typing issues)
+  const LabelChip: React.FC<{ color?: string; text: string }> = ({ color = '#6B7280', text }) => {
+    const textColor = getTextColorForBg(color);
+    return (
+      <View
+        style={{
+          backgroundColor: color,
+          borderRadius: 4,
+          paddingHorizontal: 8,
+          paddingVertical: 2,
+          minHeight: 20,
+          justifyContent: 'center',
+          alignItems: 'center',
+          borderWidth: 1,
+          borderColor: 'rgba(0,0,0,0.08)'
+        }}
+      >
+        <Text style={{ color: textColor, fontSize: 11, fontWeight: '600' }}>{text}</Text>
+      </View>
+    );
+  };
 
   useEffect(() => {
     loadConversations();
@@ -68,6 +108,45 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
       }
       
       setConversations(response.data);
+      // Load top labels for conversations (best-effort)
+      try {
+        const convs = response.data.slice(0, 20); // limit to 20 to avoid too many requests
+        const results = await Promise.all(
+          convs.map(async (c) => {
+            try {
+              const labels = await apiLabel.getTopConversationLabels(c.id, 2);
+              return { id: c.id, labels };
+            } catch (e) {
+              return { id: c.id, labels: [] as TopLabel[] };
+            }
+          })
+        );
+        const map: Record<string, TopLabel[]> = {};
+        results.forEach(r => { map[r.id] = r.labels; });
+        setTopLabelsMap(map);
+      } catch (e) {
+        // ignore
+      }
+      // Compute extras count (+N) using all labels for first 15 conversations
+      try {
+        const convs = response.data.slice(0, 15);
+        const extraPairs = await Promise.all(
+          convs.map(async (c) => {
+            try {
+              const all = await apiLabel.getConversationMessageLabels(c.id);
+              const uniqueIds = Array.from(new Set(all.map((ml: any) => ml.labelId)));
+              const shown = Math.min(2, (topLabelsMap[c.id] || []).length);
+              const extras = Math.max(0, uniqueIds.length - shown);
+              return { id: c.id, extras };
+            } catch {
+              return { id: c.id, extras: 0 };
+            }
+          })
+        );
+        const extrasMap: Record<string, number> = {};
+        extraPairs.forEach(p => { extrasMap[p.id] = p.extras; });
+        setConvExtraLabelsMap(extrasMap);
+      } catch {}
       
       // Clear error nếu load thành công
       setError(null);
@@ -96,6 +175,19 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
       console.log('[ChatScreen] Last message date:', sortedMessages[sortedMessages.length - 1]?.sentAt);
       
       setMessages(sortedMessages);
+      // Load message labels for this conversation (single call)
+      try {
+        const allLabels = await apiLabel.getConversationMessageLabels(conversationId);
+        const grouped: Record<string, MsgLabel[]> = {};
+        allLabels.forEach((ml: any) => {
+          const mid = ml.messageId;
+          if (!grouped[mid]) grouped[mid] = [];
+          grouped[mid].push(ml);
+        });
+        setMessageLabelsMap(grouped);
+      } catch (e) {
+        setMessageLabelsMap({});
+      }
       
       // Mark as read (bỏ qua lỗi nếu endpoint không tồn tại)
       try {
@@ -271,7 +363,17 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
     if (!lastTime) {
       lastTime = new Date();
     }
-    
+
+    // Preview text: ưu tiên nội dung tin nhắn cuối, fallback "Chat với ..."
+    const previewText = item.lastMessage?.content || `Chat với ${
+      (item.customer as any)?.phone ||
+      (item.customer as any)?.email ||
+      (item.customer as any)?.name ||
+      'khách hàng'
+    }`;
+
+    const topLabels = topLabelsMap[item.id] || [];
+    const extraCount = convExtraLabelsMap[item.id] || 0;
     return (
       <TouchableOpacity
         style={[
@@ -314,7 +416,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
           </View>
           <View style={styles.conversationFooter}>
             <Text style={styles.lastMessage} numberOfLines={1}>
-              {item.title || 'Cuộc hội thoại mới'}
+              {previewText}
             </Text>
             {(item as any).unreadCount > 0 && (
               <View style={styles.unreadBadge}>
@@ -322,12 +424,23 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
               </View>
             )}
           </View>
+          {topLabels.length > 0 && (
+            <View style={styles.convLabelRow}>
+              {topLabels.slice(0, 2).map((l) => (
+                <LabelChip text={l.labelName} color={l.color || '#6B7280'} />
+              ))}
+              {extraCount > 0 && (
+                <LabelChip text={`+${extraCount}`} color={'#9CA3AF'} />
+              )}
+            </View>
+          )}
         </View>
       </TouchableOpacity>
     );
   };
 
   const renderMessage = ({ item }: { item: Message }) => {
+    const labels = messageLabelsMap[item.id] || [];
     return (
       <MessageBubble
         content={item.content}
@@ -335,7 +448,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
         senderType={item.senderType}
         sentAt={new Date(item.sentAt)}
         attachments={item.metadata?.attachments || (item as any).attachments}
-        metadata={item.metadata}
+        metadata={{ ...item.metadata, __labels: labels }}
       />
     );
   };
@@ -345,7 +458,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
     return (
       <View style={styles.container}>
         {/* Header */}
-        <LinearGradient colors={['#3B82F6', '#8B5CF6']} style={styles.header}>
+        <LinearGradient colors={['#6D28D9', '#8B5CF6']} style={styles.header}>
           <View style={styles.headerContent}>
             {onBack && (
               <TouchableOpacity onPress={onBack} style={styles.backButton}>
@@ -372,16 +485,23 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
           </View>
 
           {/* Search Bar */}
-          <View style={styles.searchContainer}>
-            <MaterialIcons name="search" size={20} color="#9CA3AF" />
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Tìm kiếm cuộc hội thoại..."
-              placeholderTextColor="#9CA3AF"
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-            />
-          </View>
+          <LinearGradient
+            colors={['rgba(255,255,255,0.22)', 'rgba(255,255,255,0.14)']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.searchGradient}
+          >
+            <View style={styles.searchContainer}>
+              <MaterialIcons name="search" size={20} color="#E5E7EB" />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Tìm kiếm cuộc hội thoại..."
+                placeholderTextColor="#E5E7EB"
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+              />
+            </View>
+          </LinearGradient>
         </LinearGradient>
 
         {/* Conversations List */}
@@ -407,7 +527,11 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
               const customerName = (conv.customer as any)?.fullName || 
                                   (conv.customer as any)?.name || 
                                   conv.title || '';
-              return customerName.toLowerCase().includes(query);
+              const lastMsg = (conv.lastMessage?.content || '').toLowerCase();
+              return (
+                customerName.toLowerCase().includes(query) ||
+                lastMsg.includes(query)
+              );
             })}
             renderItem={renderConversationItem}
             keyExtractor={(item) => item.id}
@@ -520,7 +644,6 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
 
       {/* Messages List */}
       <FlatList
-        ref={flatListRef}
         data={[...messages].reverse()}
         renderItem={renderMessage}
         keyExtractor={(item) => item.id}
@@ -612,13 +735,18 @@ const styles = StyleSheet.create({
     padding: 4,
     marginLeft: 4,
   },
+  searchGradient: {
+    borderRadius: 16,
+    padding: 2,
+    marginTop: 4,
+  },
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    borderRadius: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 16,
     paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingVertical: 10,
   },
   searchInput: {
     flex: 1,
@@ -748,6 +876,13 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#6B7280',
   },
+  convLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 6,
+    flexWrap: 'wrap',
+  },
   unreadBadge: {
     backgroundColor: '#EF4444',
     borderRadius: 10,
@@ -794,6 +929,26 @@ const styles = StyleSheet.create({
     color: '#9CA3AF',
     textAlign: 'center',
     lineHeight: 20,
+  },
+  messageLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 2,
+    paddingHorizontal: 0,
+    maxWidth: '80%',
+  },
+  messageLabelRowCustomer: {
+    alignSelf: 'flex-start',
+    borderTopWidth: 1,
+    borderTopColor: '#e5e7eb',
+    paddingTop: 4,
+  },
+  messageLabelRowAgent: {
+    alignSelf: 'flex-end',
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.25)',
+    paddingTop: 4,
   },
   chatHeader: {
     flexDirection: 'row',
