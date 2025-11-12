@@ -1,7 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity, Alert } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, Image, TouchableOpacity, Alert, Pressable } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
+import ReactionBadge from './ReactionBadge';
+import { ReactionSummary } from '../../services/apiReactions';
 
 interface MessageBubbleProps {
   content: string;
@@ -10,6 +12,16 @@ interface MessageBubbleProps {
   sentAt: Date;
   attachments?: any;
   metadata?: any;
+  messageId?: string;
+  reactions?: ReactionSummary[];
+  onOpenLabelPicker?: (messageId: string) => void;
+  onReply?: (messageId: string) => void;
+  onTranslate?: (messageId: string) => void;
+  onMore?: (messageId: string) => void;
+  onOpenContext?: (params: { id: string; anchor: { x: number; y: number; width: number; height: number }; isFromCustomer: boolean; content?: string }) => void;
+  onAddReaction?: (messageId: string, emoji: string) => void;
+  onRemoveReaction?: (messageId: string, emoji: string) => void;
+  onShowReactions?: (messageId: string) => void;
 }
 
 const MessageBubble: React.FC<MessageBubbleProps> = ({
@@ -19,12 +31,23 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   sentAt,
   attachments,
   metadata,
+  messageId,
+  reactions = [],
+  onOpenLabelPicker,
+  onReply,
+  onTranslate,
+  onMore,
+  onOpenContext,
+  onAddReaction,
+  onRemoveReaction,
+  onShowReactions,
 }) => {
   const isFromCustomer = senderType === 'customer';
   const [sound, setSound] = useState<Audio.Sound | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackPosition, setPlaybackPosition] = useState(0);
   const [playbackDuration, setPlaybackDuration] = useState(0);
+  const containerRef = useRef<View>(null);
   const transcriptText =
     typeof metadata?.transcript === 'string'
       ? metadata.transcript
@@ -52,6 +75,8 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
       }
     };
   }, [sound]);
+
+  // no auto-hide needed, overlay handled by parent
 
   const handlePlayPause = async (audioUrl: string) => {
     try {
@@ -126,66 +151,70 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
             // Render image
             if (isImage) {
               return (
-                <View key={index}>
-                  <Image
-                    source={{ uri: file.fileUrl }}
-                    style={styles.imageAttachment}
-                    resizeMode="cover"
-                  />
-                  {content && !content.match(/^\[PHOTO\]$/i) && (
-                    <Text style={styles.imageCaption}>{content}</Text>
-                  )}
-                </View>
+                <React.Fragment key={index}>
+                  <View>
+                    <Image
+                      source={{ uri: file.fileUrl }}
+                      style={styles.imageAttachment}
+                      resizeMode="cover"
+                    />
+                    {content && !content.match(/^\[PHOTO\]$/i) && (
+                      <Text style={styles.imageCaption}>{content}</Text>
+                    )}
+                  </View>
+                </React.Fragment>
               );
             }
 
             // Render audio/voice
             if (isAudio) {
               return (
-                <View key={index}>
-                  <View style={styles.voicePlayer}>
-                    <TouchableOpacity 
-                      style={styles.playButton}
-                      onPress={() => handlePlayPause(file.fileUrl)}
-                    >
-                      <MaterialIcons 
-                        name={isPlaying ? "pause" : "play-arrow"} 
-                        size={20} 
-                        color="#3B82F6" 
-                      />
-                    </TouchableOpacity>
-                    <View style={styles.waveformContainer}>
-                      <View style={styles.waveform}>
-                        <View style={[styles.waveformBar, { height: 12 }]} />
-                        <View style={[styles.waveformBar, { height: 20 }]} />
-                        <View style={[styles.waveformBar, { height: 16 }]} />
-                        <View style={[styles.waveformBar, { height: 24 }]} />
-                        <View style={[styles.waveformBar, { height: 14 }]} />
-                        <View style={[styles.waveformBar, { height: 22 }]} />
-                        <View style={[styles.waveformBar, { height: 18 }]} />
-                        <View style={[styles.waveformBar, { height: 20 }]} />
-                        <View style={[styles.waveformBar, { height: 16 }]} />
-                        <View style={[styles.waveformBar, { height: 24 }]} />
-                        <View style={[styles.waveformBar, { height: 12 }]} />
-                        <View style={[styles.waveformBar, { height: 20 }]} />
+                <React.Fragment key={index}>
+                  <View>
+                    <View style={styles.voicePlayer}>
+                      <TouchableOpacity 
+                        style={styles.playButton}
+                        onPress={() => handlePlayPause(file.fileUrl)}
+                      >
+                        <MaterialIcons 
+                          name={isPlaying ? "pause" : "play-arrow"} 
+                          size={20} 
+                          color="#3B82F6" 
+                        />
+                      </TouchableOpacity>
+                      <View style={styles.waveformContainer}>
+                        <View style={styles.waveform}>
+                          <View style={[styles.waveformBar, { height: 12 }]} />
+                          <View style={[styles.waveformBar, { height: 20 }]} />
+                          <View style={[styles.waveformBar, { height: 16 }]} />
+                          <View style={[styles.waveformBar, { height: 24 }]} />
+                          <View style={[styles.waveformBar, { height: 14 }]} />
+                          <View style={[styles.waveformBar, { height: 22 }]} />
+                          <View style={[styles.waveformBar, { height: 18 }]} />
+                          <View style={[styles.waveformBar, { height: 20 }]} />
+                          <View style={[styles.waveformBar, { height: 16 }]} />
+                          <View style={[styles.waveformBar, { height: 24 }]} />
+                          <View style={[styles.waveformBar, { height: 12 }]} />
+                          <View style={[styles.waveformBar, { height: 20 }]} />
+                        </View>
+                        <Text style={styles.voiceDuration}>
+                          {isPlaying && playbackDuration > 0
+                            ? `${Math.floor(playbackPosition / 60000)}:${String(Math.floor((playbackPosition % 60000) / 1000)).padStart(2, '0')}`
+                            : file.duration 
+                              ? `${Math.floor(file.duration / 60)}:${String(Math.floor(file.duration % 60)).padStart(2, '0')}` 
+                              : '0:01'
+                          }
+                        </Text>
                       </View>
-                      <Text style={styles.voiceDuration}>
-                        {isPlaying && playbackDuration > 0
-                          ? `${Math.floor(playbackPosition / 60000)}:${String(Math.floor((playbackPosition % 60000) / 1000)).padStart(2, '0')}`
-                          : file.duration 
-                            ? `${Math.floor(file.duration / 60)}:${String(Math.floor(file.duration % 60)).padStart(2, '0')}` 
-                            : '0:01'
-                        }
-                      </Text>
                     </View>
+                    {transcriptText && (
+                      <View style={styles.transcriptBox}>
+                        <MaterialIcons name="subtitles" size={14} color="#6B7280" />
+                        <Text style={styles.transcriptText}>{transcriptText}</Text>
+                      </View>
+                    )}
                   </View>
-                  {transcriptText && (
-                    <View style={styles.transcriptBox}>
-                      <MaterialIcons name="subtitles" size={14} color="#6B7280" />
-                      <Text style={styles.transcriptText}>{transcriptText}</Text>
-                    </View>
-                  )}
-                </View>
+                </React.Fragment>
               );
             }
 
@@ -313,59 +342,84 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
         isFromCustomer ? styles.messageLeft : styles.messageRight,
       ]}
     >
-      <View
-        style={[
-          styles.messageBubble,
-          isFromCustomer ? styles.messageBubbleCustomer : styles.messageBubbleAgent,
-        ]}
-      >
-        {renderContent()}
-
-        {Array.isArray(metadata?.__labels) && metadata.__labels.length > 0 && (
-          <View
-            style={[
-              styles.labelRow,
-              isFromCustomer ? styles.labelRowCustomer : styles.labelRowAgent,
-            ]}
-          >
-            {metadata.__labels.map((ml: any, idx: number) => {
-              const label = ml.label || {};
-              const bg = label.color || '#6B7280';
-              const textColor = getTextColorForBg(bg);
-              return (
-                <View
-                  key={idx}
-                  style={{
-                    backgroundColor: bg,
-                    borderRadius: 4,
-                    paddingHorizontal: 8,
-                    paddingVertical: 2,
-                    minHeight: 20,
-                    justifyContent: 'center',
-                    alignItems: 'center',
-                    borderWidth: 1,
-                    borderColor: 'rgba(0,0,0,0.08)'
-                  }}
-                >
-                  <Text style={{ color: textColor, fontSize: 11, fontWeight: '600' }}>
-                    {label.name || ml.labelId}
-                  </Text>
-                </View>
-              );
-            })}
-          </View>
-        )}
-
-        <Text
-          style={[
-            styles.messageTime,
-            isFromCustomer ? styles.messageTimeCustomer : styles.messageTimeAgent,
+      <View ref={containerRef} style={{ position: 'relative' }}>
+        <Pressable
+          onLongPress={() => {
+            const id = messageId || (metadata?.id as string);
+            if (!id) return;
+            try {
+              containerRef.current?.measureInWindow((x, y, width, height) => {
+                onOpenContext?.({ id, anchor: { x, y, width, height }, isFromCustomer, content });
+              });
+            } catch {}
+          }}
+          delayLongPress={250}
+          style={({ pressed }) => [
+            styles.messageBubble,
+            isFromCustomer ? styles.messageBubbleCustomer : styles.messageBubbleAgent,
+            pressed ? { opacity: 0.98 } : null,
           ]}
         >
-          {formatTime(sentAt)}
-        </Text>
-      </View>
+          {renderContent()}
+          
+          {/* Reaction Badge */}
+          {reactions && reactions.length > 0 && messageId && (
+            <ReactionBadge 
+              reactions={reactions}
+              onPress={() => onShowReactions?.(messageId)}
+              isFromCustomer={isFromCustomer} 
+            />
+          )}
+
+          {Array.isArray(metadata?.__labels) && metadata.__labels.length > 0 && (
+            <View
+              style={[
+                styles.labelRow,
+                isFromCustomer ? styles.labelRowCustomer : styles.labelRowAgent,
+              ]}
+            >
+              {metadata.__labels.map((ml: any, idx: number) => {
+                const label = ml.label || {};
+                const bg = label.color || '#6B7280';
+                const textColor = getTextColorForBg(bg);
+                return (
+                  <React.Fragment key={idx}>
+                    <View
+                      style={{
+                        backgroundColor: bg,
+                        borderRadius: 4,
+                        paddingHorizontal: 8,
+                        paddingVertical: 2,
+                        minHeight: 20,
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                        borderWidth: 1,
+                        borderColor: 'rgba(0,0,0,0.08)'
+                      }}
+                    >
+                      <Text style={{ color: textColor, fontSize: 11, fontWeight: '600' }}>
+                        {label.name || ml.labelId}
+                      </Text>
+                    </View>
+                  </React.Fragment>
+                );
+              })}
+            </View>
+          )}
+
+          <Text
+            style={[
+              styles.messageTime,
+              isFromCustomer ? styles.messageTimeCustomer : styles.messageTimeAgent,
+            ]}
+          >
+            {formatTime(sentAt)}
+          </Text>
+        </Pressable>
+
+        {/* Context overlay is handled by parent (ChatScreen) */}
     </View>
+  </View>
   );
 };
 
@@ -531,6 +585,99 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#374151',
     lineHeight: 18,
+  },
+  actionBar: {
+    position: 'absolute',
+    top: -28,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    zIndex: 20,
+  },
+  actionBarLeft: {
+    left: 0,
+  },
+  actionBarRight: {
+    right: 0,
+  },
+  actionBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  reactionWrapper: {
+    position: 'absolute',
+    top: -46,
+  },
+  reactionPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(17, 24, 39, 0.85)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    gap: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)'
+  },
+  reactionEmoji: {
+    fontSize: 18,
+    marginHorizontal: 3,
+  },
+  reactionPlus: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 4,
+  },
+  actionMenu: {
+    position: 'absolute',
+    bottom: -10,
+    backgroundColor: 'rgba(17,24,39,0.96)',
+    borderRadius: 12,
+    paddingVertical: 6,
+    minWidth: 180,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+    elevation: 6,
+  },
+  actionMenuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+  },
+  actionMenuText: {
+    color: '#E5E7EB',
+    fontSize: 14,
+  },
+  actionMenuDivider: {
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    marginVertical: 4,
+  },
+  actionMenuDanger: {
+    color: '#EF4444',
+    fontWeight: '600',
   },
 });
 

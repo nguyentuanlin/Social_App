@@ -70,6 +70,15 @@ export interface SendMessageDto {
   content: string;
   contentType?: string;
   replyToMessageId?: string;
+  sendToSocialNetwork?: boolean; // Gửi qua webhook đến social network
+  attachments?: any[];
+}
+
+export interface SendMessageResponse {
+  success?: boolean;
+  message?: Message;
+  error?: string;
+  userMessage?: string;
 }
 
 export const chatApi = {
@@ -180,18 +189,74 @@ export const chatApi = {
   },
 
   /**
-   * Gửi message
+   * Gửi message với error handling như web app
    */
-  sendMessage: async (data: SendMessageDto): Promise<Message> => {
-    const response = await apiClient.post('/chat/messages', data);
-    return response.data;
+  sendMessage: async (data: SendMessageDto): Promise<SendMessageResponse> => {
+    try {
+      console.log('[Chat API] Sending message:', data);
+      
+      // Mặc định gửi qua social network webhook
+      const messageData = {
+        ...data,
+        sendToSocialNetwork: data.sendToSocialNetwork !== false, // Default true
+      };
+      
+      const response = await apiClient.post('/chat/messages', messageData);
+      
+      // Kiểm tra nếu response có error (từ backend)
+      if (response.data.success === false) {
+        console.warn('[Chat API] Message send failed:', {
+          error: response.data.error,
+          userMessage: response.data.userMessage,
+          time: new Date().toISOString()
+        });
+        
+        return {
+          success: false,
+          message: response.data.message,
+          error: response.data.error,
+          userMessage: response.data.userMessage
+        };
+      }
+      
+      return {
+        success: true,
+        message: response.data
+      };
+      
+    } catch (error: any) {
+      console.error('[Chat API] Error sending message:', error);
+      
+      // Xử lý các lỗi HTTP
+      if (error.response?.status === 400) {
+        return {
+          success: false,
+          error: 'VALIDATION_ERROR',
+          userMessage: 'Dữ liệu tin nhắn không hợp lệ'
+        };
+      } else if (error.response?.status === 404) {
+        return {
+          success: false,
+          error: 'CONVERSATION_NOT_FOUND',
+          userMessage: 'Không tìm thấy cuộc hội thoại'
+        };
+      } else {
+        return {
+          success: false,
+          error: 'NETWORK_ERROR',
+          userMessage: 'Lỗi kết nối. Vui lòng thử lại sau.'
+        };
+      }
+    }
   },
 
   /**
-   * Đánh dấu đã đọc
+   * Đánh dấu đã đọc (API chưa có trong backend)
    */
   markAsRead: async (conversationId: string): Promise<void> => {
-    await apiClient.post(`/chat/conversations/${conversationId}/read`);
+    // TODO: Implement this API in backend
+    console.log('[API] markAsRead called for conversation:', conversationId);
+    // await apiClient.post(`/chat/conversations/${conversationId}/read`);
   },
 
   /**
@@ -200,5 +265,43 @@ export const chatApi = {
   updateStatus: async (conversationId: string, status: string): Promise<Conversation> => {
     const response = await apiClient.patch(`/chat/conversations/${conversationId}/status`, { status });
     return response.data;
+  },
+
+  /**
+   * Polling messages mới (tạm thời disable để tránh lỗi 404)
+   */
+  pollMessages: async (conversationId: string, lastMessageId?: string): Promise<Message[]> => {
+    // TODO: Implement proper polling API in backend
+    // Tạm thời return empty array để tránh spam lỗi 404
+    console.log('[API] pollMessages called for conversation:', conversationId, 'lastMessageId:', lastMessageId);
+    return [];
+  },
+
+  /**
+   * Lấy thống kê chat
+   */
+  getStats: async (): Promise<any> => {
+    try {
+      const response = await apiClient.get('/chat/stats');
+      return response.data;
+    } catch (error) {
+      console.error('[Chat API] Error fetching stats:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Tìm kiếm tin nhắn
+   */
+  searchMessages: async (conversationId: string, keyword: string): Promise<Message[]> => {
+    try {
+      const response = await apiClient.get(`/chat/conversations/${conversationId}/search`, {
+        params: { keyword }
+      });
+      return response.data;
+    } catch (error) {
+      console.error('[Chat API] Error searching messages:', error);
+      return [];
+    }
   },
 };
