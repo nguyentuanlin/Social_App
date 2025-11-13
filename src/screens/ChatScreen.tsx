@@ -1135,8 +1135,9 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
         }
       />
 
-      {/* Input Bar - New Component */}
+      {/* Input Bar - Enhanced with Upload */}
       <ChatInputBar
+        conversationId={selectedConversation.id}
         onSendMessage={async (message) => {
           if (!selectedConversation || isSending) return;
           
@@ -1168,13 +1169,24 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
             setIsSending(false);
           }
         }}
-        onSendImage={(imageUri) => {
-          console.log('Send image:', imageUri);
-          // TODO: Implement image upload
-        }}
-        onSendFile={(file) => {
-          console.log('Send file:', file);
-          // TODO: Implement file upload
+        onFileUploaded={async (uploadResult) => {
+          // File đã được upload và message đã được tạo tự động
+          // Chỉ cần refresh messages để hiển thị message mới
+          try {
+            if (uploadResult.message) {
+              // Nếu có message trong response, thêm vào danh sách
+              setMessages([...messages, uploadResult.message]);
+              showToast('File đã được gửi!');
+            } else {
+              // Nếu không có message, refresh lại danh sách messages
+              await loadMessages(selectedConversation.id);
+              showToast('File đã được gửi!');
+            }
+          } catch (error) {
+            console.error('Error handling file upload:', error);
+            // Fallback: refresh messages
+            await loadMessages(selectedConversation.id);
+          }
         }}
         isSending={isSending}
       />

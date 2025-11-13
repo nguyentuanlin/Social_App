@@ -71,7 +71,13 @@ export interface SendMessageDto {
   contentType?: string;
   replyToMessageId?: string;
   sendToSocialNetwork?: boolean; // Gửi qua webhook đến social network
-  attachments?: any[];
+  attachments?: Array<{
+    fileUrl: string;
+    originalName?: string;
+    fileName?: string;
+    mimeType?: string;
+    size?: number;
+  }>;
 }
 
 export interface SendMessageResponse {
