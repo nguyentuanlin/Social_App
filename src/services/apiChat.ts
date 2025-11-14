@@ -100,8 +100,26 @@ export const chatApi = {
   }): Promise<{ data: Conversation[]; total: number }> => {
     try {
       console.log('[Chat API] Fetching conversations with params:', params);
-      // Sử dụng endpoint external để lấy conversations từ social networks
-      const response = await apiClient.get('/chat/conversations/external', { params });
+      
+      // Lấy channels được phân công cho user hiện tại
+      let assignedChannelIds: string[] = [];
+      try {
+        const dashboardResponse = await apiClient.get('/employee-dashboard/overview');
+        const assignedChannels = dashboardResponse.data.assignedChannels || [];
+        assignedChannelIds = assignedChannels.map((ch: any) => ch.channelId);
+        console.log('[Chat API] Assigned channel IDs:', assignedChannelIds);
+      } catch (error) {
+        console.warn('[Chat API] Could not fetch assigned channels, showing all conversations');
+      }
+      
+      // Thêm filter theo channels được phân công
+      const queryParams = {
+        ...params,
+        hasChannel: true, // Chỉ lấy conversations có channel
+        ...(assignedChannelIds.length > 0 && { channelIds: assignedChannelIds.join(',') })
+      };
+      
+      const response = await apiClient.get('/chat/conversations', { params: queryParams });
       console.log('[Chat API] Response:', response.data);
       
       // Handle different response formats
@@ -123,7 +141,7 @@ export const chatApi = {
         return dateB - dateA; // Newest first
       });
       
-      console.log('[Chat API] Valid conversations:', validConversations.length, 'out of', conversations.length);
+      // console.log('[Chat API] Valid conversations:', validConversations.length, 'out of', conversations.length);
       if (validConversations.length > 0) {
         const first = validConversations[0];
         console.log('[Chat API] First conversation data:', {
@@ -162,26 +180,26 @@ export const chatApi = {
     limit?: number;
   }): Promise<{ data: Message[]; total: number }> => {
     try {
-      console.log('[Chat API] Fetching messages for conversation:', conversationId);
+      // console.log('[Chat API] Fetching messages for conversation:', conversationId);
       // Backend trả về messages cùng với conversation detail
       const response = await apiClient.get(`/chat/conversations/${conversationId}`);
-      console.log('[Chat API] Conversation detail response:', response.data);
+      // console.log('[Chat API] Conversation detail response:', response.data);
       
       // Extract messages from conversation detail
       const messages = response.data.messages || [];
-      console.log('[Chat API] Extracted messages:', messages.length);
+      // console.log('[Chat API] Extracted messages:', messages.length);
       
       // Debug: Log first and last message dates
-      if (messages.length > 0) {
-        console.log('[Chat API] First message:', {
-          date: messages[0].sentAt || messages[0].createdAt,
-          content: messages[0].content?.substring(0, 50)
-        });
-        console.log('[Chat API] Last message:', {
-          date: messages[messages.length - 1].sentAt || messages[messages.length - 1].createdAt,
-          content: messages[messages.length - 1].content?.substring(0, 50)
-        });
-      }
+      // if (messages.length > 0) {
+      //   console.log('[Chat API] First message:', {
+      //     date: messages[0].sentAt || messages[0].createdAt,
+      //     content: messages[0].content?.substring(0, 50)
+      //   });
+      //   console.log('[Chat API] Last message:', {
+      //     date: messages[messages.length - 1].sentAt || messages[messages.length - 1].createdAt,
+      //     content: messages[messages.length - 1].content?.substring(0, 50)
+      //   });
+      // }
       
       return {
         data: messages,
@@ -199,7 +217,7 @@ export const chatApi = {
    */
   sendMessage: async (data: SendMessageDto): Promise<SendMessageResponse> => {
     try {
-      console.log('[Chat API] Sending message:', data);
+      // console.log('[Chat API] Sending message:', data);
       
       // Mặc định gửi qua social network webhook
       const messageData = {
@@ -260,9 +278,11 @@ export const chatApi = {
    * Đánh dấu đã đọc (API chưa có trong backend)
    */
   markAsRead: async (conversationId: string): Promise<void> => {
-    // TODO: Implement this API in backend
-    console.log('[API] markAsRead called for conversation:', conversationId);
-    // await apiClient.post(`/chat/conversations/${conversationId}/read`);
+    try {
+      await apiClient.patch(`/chat/conversations/${conversationId}/read`, {});
+    } catch (e) {
+      // console.log('[API] markAsRead failed (non fatal):', e);
+    }
   },
 
   /**
@@ -279,7 +299,7 @@ export const chatApi = {
   pollMessages: async (conversationId: string, lastMessageId?: string): Promise<Message[]> => {
     // TODO: Implement proper polling API in backend
     // Tạm thời return empty array để tránh spam lỗi 404
-    console.log('[API] pollMessages called for conversation:', conversationId, 'lastMessageId:', lastMessageId);
+    // console.log('[API] pollMessages called for conversation:', conversationId, 'lastMessageId:', lastMessageId);
     return [];
   },
 

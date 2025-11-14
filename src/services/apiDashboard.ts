@@ -15,26 +15,45 @@ export const dashboardApi = {
    */
   getEmployeeStats: async (): Promise<DashboardStats> => {
     try {
+      // Sử dụng employee dashboard API - đã có logic phân quyền theo user_channels
       const response = await apiClient.get('/employee-dashboard/overview');
+      
+      // Debug logging
+      console.log('[Dashboard API] Employee dashboard response:', response.data);
+      console.log('[Dashboard API] Assigned channels:', response.data.assignedChannels);
+      
       return {
         totalConversations: response.data.totalConversations || 0,
         totalMessages: response.data.totalMessages || 0,
-        totalCustomers: response.data.totalCustomers || 0,
+        totalCustomers: response.data.totalCustomers || 0, 
         totalChannels: response.data.assignedChannels?.length || 0,
-        unreadMessages: response.data.unreadMessages || 0,
+        unreadMessages: response.data.unreadConversations || 0,
         pendingConversations: response.data.pendingConversations || 0,
       };
     } catch (error) {
       console.error('[Dashboard API] Error:', error);
-      // Return default values on error
-      return {
-        totalConversations: 0,
-        totalMessages: 0,
-        totalCustomers: 0,
-        totalChannels: 0,
-        unreadMessages: 0,
-        pendingConversations: 0,
-      };
+      // Fallback to employee dashboard if chat stats fails
+      try {
+        const response = await apiClient.get('/employee-dashboard/overview');
+        return {
+          totalConversations: response.data.totalConversations || 0,
+          totalMessages: response.data.totalMessages || 0,
+          totalCustomers: response.data.totalCustomers || 0,
+          totalChannels: response.data.assignedChannels?.length || 0,
+          unreadMessages: response.data.unreadMessages || 0,
+          pendingConversations: response.data.pendingConversations || 0,
+        };
+      } catch (fallbackError) {
+        console.error('[Dashboard API] Fallback error:', fallbackError);
+        return {
+          totalConversations: 0,
+          totalMessages: 0,
+          totalCustomers: 0,
+          totalChannels: 0,
+          unreadMessages: 0,
+          pendingConversations: 0,
+        };
+      }
     }
   },
 };

@@ -8,7 +8,10 @@ import {
   ScrollView,
   Image,
   Linking,
+  Dimensions,
+  FlatList,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import CSIChart from './CSIChart';
 import EditCustomerModal from './EditCustomerModal';
@@ -40,6 +43,34 @@ const CustomerProfileModal: React.FC<CustomerProfileModalProps> = ({
   const [voiceFiles, setVoiceFiles] = useState<any[]>([]);
   const [documentFiles, setDocumentFiles] = useState<any[]>([]);
   const [isLoadingMedia, setIsLoadingMedia] = useState(false);
+  const [viewerVisible, setViewerVisible] = useState(false);
+  const [viewerIndex, setViewerIndex] = useState(0);
+
+  const screen = Dimensions.get('window');
+  const screenW = screen.width;
+  const screenH = screen.height;
+  const insets = useSafeAreaInsets();
+
+  const imageItems = React.useMemo(() => mediaFiles.filter((m) => m.type === 'image'), [mediaFiles]);
+  const viewerListRef = React.useRef<FlatList>(null);
+
+  const openImageViewer = (fileId: string) => {
+    const idx = imageItems.findIndex((it) => it.id === fileId);
+    if (idx >= 0) {
+      setViewerIndex(idx);
+      setViewerVisible(true);
+    }
+  };
+
+  useEffect(() => {
+    if (viewerVisible && viewerListRef.current && imageItems.length > 0) {
+      setTimeout(() => {
+        try {
+          viewerListRef.current?.scrollToIndex({ index: Math.min(Math.max(viewerIndex, 0), imageItems.length - 1), animated: false });
+        } catch {}
+      }, 0);
+    }
+  }, [viewerVisible, viewerIndex, imageItems.length]);
 
   // Load media files from conversation messages
   useEffect(() => {
@@ -54,37 +85,64 @@ const CustomerProfileModal: React.FC<CustomerProfileModalProps> = ({
       // Fetch messages from conversation
       const conversationData: any = await chatApi.getConversation(conversation.id);
       const messages = conversationData.messages || [];
-      
-      // Filter media files
+
+      // Helpers
+      const isValidUrl = (val?: string) => typeof val === 'string' && /^https?:\/\//.test(val);
+      const guessTypeByUrl = (url: string): 'image' | 'video' | 'file' => {
+        const lower = url.toLowerCase();
+        if (/(\.jpg|\.jpeg|\.png|\.gif|\.webp)(\?|$)/.test(lower)) return 'image';
+        if (/(\.mp4|\.mov|\.webm|\.mkv)(\?|$)/.test(lower)) return 'video';
+        return 'file';
+      };
+
+      // Buckets
       const media: any[] = [];
       const voice: any[] = [];
       const docs: any[] = [];
-      
+
       messages.forEach((msg: any) => {
-        if (msg.contentType === 'image' || msg.contentType === 'video') {
-          media.push({
-            id: msg.id,
-            type: msg.contentType,
-            url: msg.content,
-            sentAt: msg.sentAt,
+        const files = (msg?.metadata?.attachments?.files || msg?.attachments?.files || []) as any[];
+
+        if (Array.isArray(files) && files.length > 0) {
+          files.forEach((f) => {
+            const mime: string = f?.mimeType || '';
+            const url: string = f?.fileUrl || f?.url || '';
+            if (!url) return;
+
+            if (mime.startsWith('image/')) {
+              media.push({ id: `${msg.id}:${url}`, type: 'image', url, sentAt: msg.sentAt });
+            } else if (mime.startsWith('video/')) {
+              media.push({ id: `${msg.id}:${url}`, type: 'video', url, sentAt: msg.sentAt });
+            } else if (mime.startsWith('audio/')) {
+              voice.push({ id: `${msg.id}:${url}`, type: 'audio', url, sentAt: msg.sentAt });
+            } else {
+              docs.push({
+                id: `${msg.id}:${url}`,
+                name: f?.originalName || f?.fileName || 'Tệp đính kèm',
+                url,
+                sentAt: msg.sentAt,
+              });
+            }
           });
-        } else if (msg.contentType === 'voice' || msg.contentType === 'audio') {
-          voice.push({
-            id: msg.id,
-            type: msg.contentType,
-            url: msg.content,
-            sentAt: msg.sentAt,
-          });
-        } else if (msg.contentType === 'file') {
-          docs.push({
-            id: msg.id,
-            name: msg.content,
-            url: msg.content,
-            sentAt: msg.sentAt,
-          });
+        } else {
+          // Fallbacks: contentType + content URL or extract URL from text
+          if ((msg.contentType === 'image' || msg.contentType === 'video') && isValidUrl(msg.content)) {
+            media.push({ id: msg.id, type: msg.contentType, url: msg.content, sentAt: msg.sentAt });
+          } else if (typeof msg.content === 'string') {
+            const match = msg.content.match(/https?:\/\/\S+/);
+            if (match && match[0]) {
+              const url = match[0];
+              const t = guessTypeByUrl(url);
+              if (t === 'image' || t === 'video') {
+                media.push({ id: msg.id, type: t, url, sentAt: msg.sentAt });
+              } else {
+                docs.push({ id: msg.id, name: msg.content, url, sentAt: msg.sentAt });
+              }
+            }
+          }
         }
       });
-      
+
       setMediaFiles(media);
       setVoiceFiles(voice);
       setDocumentFiles(docs);
@@ -155,7 +213,15 @@ const CustomerProfileModal: React.FC<CustomerProfileModalProps> = ({
           </TouchableOpacity>
         </View>
 
-        <ScrollView style={styles.content}>
+        <ScrollView 
+          style={styles.content}
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: 96 + insets.bottom, minHeight: screenH + insets.bottom }]}
+          keyboardShouldPersistTaps="handled"
+          scrollIndicatorInsets={{ bottom: 36 + insets.bottom }}
+          contentInset={{ bottom: 96 + insets.bottom }}
+          nestedScrollEnabled
+          contentInsetAdjustmentBehavior="always"
+        >
           {/* Customer Info */}
           <View style={styles.customerInfo}>
             {customer?.avatarUrl ? (
@@ -345,7 +411,18 @@ const CustomerProfileModal: React.FC<CustomerProfileModalProps> = ({
                 {mediaFiles.length > 0 ? (
                   <View style={styles.mediaGrid}>
                     {mediaFiles.map((file) => (
-                      <TouchableOpacity key={file.id} style={styles.mediaItem}>
+                      <TouchableOpacity 
+                        key={file.id} 
+                        style={styles.mediaItem}
+                        activeOpacity={0.8}
+                        onPress={() => {
+                          if (file.type === 'image') {
+                            openImageViewer(file.id);
+                          } else if (file.type === 'video') {
+                            Linking.openURL(file.url);
+                          }
+                        }}
+                      >
                         <Image
                           source={{ uri: file.url }}
                           style={styles.mediaThumbnail}
@@ -469,8 +546,64 @@ const CustomerProfileModal: React.FC<CustomerProfileModalProps> = ({
               </View>
             )}
           </View>
+          {/* Spacer để tránh bị che ở đáy và giúp kéo tới hết */}
+          <View style={{ height: 12 + insets.bottom }} />
         </ScrollView>
       </View>
+
+      {/* Fullscreen Image Viewer (absolute overlay to avoid being covered) */}
+      {viewerVisible && (
+        <View style={[styles.viewerOverlayAbs, { paddingBottom: 24 + insets.bottom }]}>
+          {/* Close button */}
+          <TouchableOpacity style={styles.viewerClose} onPress={() => setViewerVisible(false)}>
+            <MaterialIcons name="close" size={28} color="#FFFFFF" />
+          </TouchableOpacity>
+
+          {/* Images pager */}
+          <FlatList
+            ref={viewerListRef as any}
+            data={imageItems}
+            horizontal
+            pagingEnabled
+            keyExtractor={(item) => item.id}
+            initialScrollIndex={Math.min(Math.max(viewerIndex, 0), Math.max(0, imageItems.length - 1))}
+            getItemLayout={(_, index) => ({ length: screenW, offset: screenW * index, index })}
+            onMomentumScrollEnd={(e) => {
+              const idx = Math.round(e.nativeEvent.contentOffset.x / screenW);
+              if (!Number.isNaN(idx)) setViewerIndex(idx);
+            }}
+            renderItem={({ item }) => (
+              <View style={{ width: screenW, height: screenH, justifyContent: 'center', alignItems: 'center' }}>
+                <Image source={{ uri: item.url }} style={styles.viewerImage} resizeMode="contain" />
+              </View>
+            )}
+            showsHorizontalScrollIndicator={false}
+          />
+
+          {/* Thumbnails bar */}
+          <ScrollView 
+            horizontal 
+            style={[styles.viewerThumbBar, { bottom: 28 + insets.bottom }]} 
+            contentContainerStyle={styles.viewerThumbContent}
+            showsHorizontalScrollIndicator={false}
+          >
+            {imageItems.map((it, idx) => (
+              <TouchableOpacity
+                key={it.id}
+                onPress={() => {
+                  setViewerIndex(idx);
+                  try { viewerListRef.current?.scrollToIndex({ index: idx, animated: true }); } catch {}
+                }}
+              >
+                <Image 
+                  source={{ uri: it.url }} 
+                  style={[styles.viewerThumb, idx === viewerIndex && styles.viewerThumbActive]} 
+                />
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      )}
 
       {/* Edit Customer Modal */}
       <EditCustomerModal
@@ -515,6 +648,9 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
+  },
+  scrollContent: {
+    paddingBottom: 220,
   },
   customerInfo: {
     backgroundColor: '#FFFFFF',
@@ -679,6 +815,58 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#9CA3AF',
     marginTop: 12,
+  },
+  // Fullscreen viewer
+  viewerOverlayAbs: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.92)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 9999,
+    elevation: 9999,
+    paddingBottom: 24,
+  },
+  viewerImage: {
+    width: '90%',
+    height: '80%',
+  },
+  viewerClose: {
+    position: 'absolute',
+    top: 40,
+    right: 16,
+    zIndex: 10,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  viewerThumbBar: {
+    position: 'absolute',
+    bottom: 28,
+    left: 0,
+    right: 0,
+  },
+  viewerThumbContent: {
+    paddingHorizontal: 10,
+    alignItems: 'center',
+    gap: 8,
+  },
+  viewerThumb: {
+    width: 54,
+    height: 54,
+    borderRadius: 8,
+    marginHorizontal: 4,
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  viewerThumbActive: {
+    borderColor: '#3B82F6',
   },
   mediaGrid: {
     flexDirection: 'row',

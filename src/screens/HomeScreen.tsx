@@ -52,7 +52,7 @@ const HomeScreen = () => {
 
   const handlePickImage = async (target: 'avatar' | 'cover') => {
     try {
-      console.log('[HomeScreen] Pick image for', target);
+      // console.log('[HomeScreen] Pick image for', target);
       if (Platform.OS !== 'web') {
         const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
         if (status !== 'granted') {

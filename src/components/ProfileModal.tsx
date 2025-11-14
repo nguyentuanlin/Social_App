@@ -28,32 +28,32 @@ const ProfileModal: React.FC<ProfileModalProps> = ({ visible, onClose }) => {
   const [confirmVisible, setConfirmVisible] = useState(false);
 
   const handleLogout = () => {
-    console.log('[ProfileModal] 🎯 handleLogout được gọi');
-    console.log('[ProfileModal] 🌐 Platform:', Platform.OS);
+    // console.log('[ProfileModal] 🎯 handleLogout được gọi');
+    // console.log('[ProfileModal] 🌐 Platform:', Platform.OS);
     setConfirmVisible(true);
   };
 
   const performLogout = async () => {
     try {
-      console.log('='.repeat(60));
-      console.log('[ProfileModal] 🚪 User XÁC NHẬN đăng xuất');
-      console.log('[ProfileModal] 📍 Bước 1: Đóng modal...');
+      // console.log('='.repeat(60));
+      // console.log('[ProfileModal] 🚪 User XÁC NHẬN đăng xuất');
+      // console.log('[ProfileModal] 📍 Bước 1: Đóng modal...');
       
       // Đóng modal trước
       onClose();
-      console.log('[ProfileModal] ✅ Modal đã gọi onClose()');
+      // console.log('[ProfileModal] ✅ Modal đã gọi onClose()');
       
       // Đợi một chút để modal đóng hoàn toàn
-      console.log('[ProfileModal] ⏳ Đợi 300ms...');
+      // console.log('[ProfileModal] ⏳ Đợi 300ms...');
       await new Promise(resolve => setTimeout(resolve, 300));
-      console.log('[ProfileModal] ✅ Đã đợi xong');
+      // console.log('[ProfileModal] ✅ Đã đợi xong');
       
       // Thực hiện logout
-      console.log('[ProfileModal] 📍 Bước 2: Gọi logout()...');
-      console.log('[ProfileModal] 🔍 logout function:', typeof logout);
+      // console.log('[ProfileModal] 📍 Bước 2: Gọi logout()...');
+      // console.log('[ProfileModal] 🔍 logout function:', typeof logout);
       await logout();
-      console.log('[ProfileModal] ✅ Logout hoàn thành');
-      console.log('='.repeat(60));
+      // console.log('[ProfileModal] ✅ Logout hoàn thành');
+      // console.log('='.repeat(60));
     } catch (error) {
       console.error('[ProfileModal] ❌ Logout error:', error);
       console.error('[ProfileModal] ❌ Error stack:', error);
@@ -210,8 +210,8 @@ const ProfileModal: React.FC<ProfileModalProps> = ({ visible, onClose }) => {
             <TouchableOpacity 
               style={styles.logoutButton} 
               onPress={() => {
-                console.log('[ProfileModal] 🖱️ NÚT ĐĂNG XUẤT ĐƯỢC CLICK!');
-                console.log('[ProfileModal] 🔍 handleLogout function:', typeof handleLogout);
+                // console.log('[ProfileModal] 🖱️ NÚT ĐĂNG XUẤT ĐƯỢC CLICK!');
+                // console.log('[ProfileModal] 🔍 handleLogout function:', typeof handleLogout);
                 handleLogout();
               }}
             >
@@ -239,11 +239,11 @@ const ProfileModal: React.FC<ProfileModalProps> = ({ visible, onClose }) => {
         cancelText="Hủy"
         type="danger"
         onCancel={() => {
-          console.log('[ProfileModal] ❌ User hủy đăng xuất (custom)');
+          // console.log('[ProfileModal] ❌ User hủy đăng xuất (custom)');
           setConfirmVisible(false);
         }}
         onConfirm={async () => {
-          console.log('[ProfileModal] ✅ User xác nhận đăng xuất (custom)');
+          // console.log('[ProfileModal] ✅ User xác nhận đăng xuất (custom)');
           setConfirmVisible(false);
           await performLogout();
         }}

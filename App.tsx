@@ -11,11 +11,11 @@ const Stack = createNativeStackNavigator();
 function Navigation() {
   const { isAuthenticated, isLoading, user } = useAuth();
 
-  console.log('[App/Navigation] 🔄 Re-render');
-  console.log('[App/Navigation] 📊 isAuthenticated:', isAuthenticated);
-  console.log('[App/Navigation] 📊 isLoading:', isLoading);
-  console.log('[App/Navigation] 📊 user:', user?.email || 'null');
-  console.log('[App/Navigation] 🎬 Will show:', isAuthenticated ? 'HomeScreen' : 'LoginScreen');
+  // console.log('[App/Navigation] 🔄 Re-render');
+  // console.log('[App/Navigation] 📊 isAuthenticated:', isAuthenticated);
+  // console.log('[App/Navigation] 📊 isLoading:', isLoading);
+  // console.log('[App/Navigation] 📊 user:', user?.email || 'null');
+  // console.log('[App/Navigation] 🎬 Will show:', isAuthenticated ? 'HomeScreen' : 'LoginScreen');
 
   return (
     <NavigationContainer>

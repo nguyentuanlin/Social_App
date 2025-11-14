@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity, Alert, Pressable } from 'react-native';
+import { View, Text, StyleSheet, Image, TouchableOpacity, Alert, Pressable, Dimensions, Platform } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
 import ReactionBadge from './ReactionBadge';
@@ -22,6 +22,7 @@ interface MessageBubbleProps {
   onAddReaction?: (messageId: string, emoji: string) => void;
   onRemoveReaction?: (messageId: string, emoji: string) => void;
   onShowReactions?: (messageId: string) => void;
+  replyTo?: { author?: string; content?: string } | null;
 }
 
 const MessageBubble: React.FC<MessageBubbleProps> = ({
@@ -41,6 +42,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   onAddReaction,
   onRemoveReaction,
   onShowReactions,
+  replyTo,
 }) => {
   const isFromCustomer = senderType === 'customer';
   const [sound, setSound] = useState<Audio.Sound | null>(null);
@@ -52,6 +54,83 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
     typeof metadata?.transcript === 'string'
       ? metadata.transcript
       : (metadata?.transcript?.text || '');
+ 
+  // Determine if this message is an image message to render without bubble background
+  const hasImageFiles = Array.isArray(attachments?.files) && attachments.files.some((f: any) => f?.mimeType?.startsWith('image/'));
+  const isImageMessage = hasImageFiles || contentType === 'image';
+
+  // Auto size image to a moderate box while keeping aspect ratio
+  const AutoImage: React.FC<{ uri: string }> = ({ uri }) => {
+    const [size, setSize] = useState<{ w: number; h: number } | null>(null);
+    const screenW = Dimensions.get('window').width;
+    const maxW = Math.min(Math.round(screenW * 0.55), 260); // moderate width
+    const maxH = 320; // cap height
+
+    useEffect(() => {
+      let mounted = true;
+      // Try read from caches (memory + sessionStorage on web)
+      try {
+        let cached: { w: number; h: number } | null = null;
+        // Memory cache
+        // @ts-ignore
+        if (typeof (globalThis as any).__imgSizeCache === 'undefined') {
+          // @ts-ignore
+          (globalThis as any).__imgSizeCache = {} as Record<string, { w: number; h: number }>;
+        }
+        // @ts-ignore
+        const memCache = (globalThis as any).__imgSizeCache as Record<string, { w: number; h: number }>;
+        if (memCache[uri]) {
+          cached = memCache[uri];
+        } else if (Platform.OS === 'web' && typeof window !== 'undefined' && window.sessionStorage) {
+          const raw = window.sessionStorage.getItem('imgsize:' + uri);
+          if (raw) {
+            try { cached = JSON.parse(raw); } catch {}
+            if (cached && cached.w && cached.h) memCache[uri] = cached;
+          }
+        }
+        if (cached && cached.w && cached.h) {
+          const scale = Math.min(maxW / cached.w, maxH / cached.h, 1);
+          setSize({ w: Math.max(1, Math.round(cached.w * scale)), h: Math.max(1, Math.round(cached.h * scale)) });
+          return () => { mounted = false; };
+        }
+
+        Image.getSize(
+          uri,
+          (w, h) => {
+            if (!mounted) return;
+            const scale = Math.min(maxW / w, maxH / h, 1);
+            const computed = { w: Math.max(1, Math.round(w * scale)), h: Math.max(1, Math.round(h * scale)) };
+            setSize(computed);
+            try {
+              // Save to caches
+              memCache[uri] = { w, h };
+              if (Platform.OS === 'web' && typeof window !== 'undefined' && window.sessionStorage) {
+                window.sessionStorage.setItem('imgsize:' + uri, JSON.stringify({ w, h }));
+              }
+            } catch {}
+          },
+          () => {
+            if (!mounted) return;
+            setSize({ w: maxW, h: Math.round(maxW * 9 / 16) });
+          }
+        );
+      } catch {
+        if (mounted) setSize({ w: maxW, h: Math.round(maxW * 9 / 16) });
+      }
+      return () => { mounted = false; };
+    }, [uri]);
+
+    return (
+      <Image
+        source={{ uri }}
+        style={[
+          styles.imageAttachment,
+          size ? { width: size.w, height: size.h } : { width: maxW, height: Math.round(maxW * 9 / 16) }
+        ]}
+        resizeMode="contain"
+      />
+    );
+  };
 
   // Cleanup sound on unmount
   // Compute readable text color for label background
@@ -120,18 +199,32 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
 
   const formatTime = (date: Date) => {
     const now = new Date();
-    const messageDate = new Date(date);
-    const diffMs = now.getTime() - messageDate.getTime();
+    let msg = new Date(date);
+    let diffMs = now.getTime() - msg.getTime();
+    // Nếu server trả thời gian bị +7h (hoặc tương tự) khiến diff âm nhưng nhỏ hơn 12h, hiệu chỉnh về local
+    if (diffMs < -5 * 60 * 1000 && Math.abs(diffMs) < 12 * 60 * 60 * 1000) {
+      const tzMs = new Date().getTimezoneOffset() * 60 * 1000; // VN: -420 phút
+      msg = new Date(msg.getTime() - (-tzMs)); // trừ (+7h) nếu offset âm
+      diffMs = now.getTime() - msg.getTime();
+    }
+
+    if (diffMs < 0) diffMs = 0; // chặn trường hợp lệch nhỏ
+
     const diffMins = Math.floor(diffMs / 60000);
     const diffHours = Math.floor(diffMs / 3600000);
     const diffDays = Math.floor(diffMs / 86400000);
 
     if (diffMins < 1) return 'Vừa xong';
-    if (diffMins < 60) return `${diffMins} phút`;
-    if (diffHours < 24) return `${diffHours} giờ`;
-    if (diffDays < 7) return `${diffDays} ngày`;
-    
-    return messageDate.toLocaleDateString('vi-VN');
+    if (diffMins < 60) return `${diffMins} phút trước`;
+    if (diffHours < 24) return `${diffHours} giờ trước`;
+    if (diffDays < 7) return `${diffDays} ngày trước`;
+
+    const dd = String(msg.getDate()).padStart(2, '0');
+    const mm = String(msg.getMonth() + 1).padStart(2, '0');
+    const yyyy = msg.getFullYear();
+    const hh = String(msg.getHours()).padStart(2, '0');
+    const mi = String(msg.getMinutes()).padStart(2, '0');
+    return `${dd}/${mm}/${yyyy} ${hh}:${mi}`;
   };
 
   const renderContent = () => {
@@ -153,11 +246,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
               return (
                 <React.Fragment key={index}>
                   <View>
-                    <Image
-                      source={{ uri: file.fileUrl }}
-                      style={styles.imageAttachment}
-                      resizeMode="cover"
-                    />
+                    <AutoImage uri={file.fileUrl} />
                     {content && !content.match(/^\[PHOTO\]$/i) && (
                       <Text style={styles.imageCaption}>{content}</Text>
                     )}
@@ -244,11 +333,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
         return (
           <View>
             {attachments && Array.isArray(attachments) && attachments.length > 0 && (
-              <Image
-                source={{ uri: attachments[0].url }}
-                style={styles.imageAttachment}
-                resizeMode="cover"
-              />
+              <AutoImage uri={attachments[0].url} />
             )}
             {content && <Text style={styles.imageCaption}>{content}</Text>}
           </View>
@@ -340,9 +425,41 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
       style={[
         styles.messageContainer,
         isFromCustomer ? styles.messageLeft : styles.messageRight,
+        isImageMessage ? styles.imageContainer : null,
       ]}
     >
       <View ref={containerRef} style={{ position: 'relative' }}>
+        {replyTo && (
+          <View style={[
+            styles.replyHeader,
+            isFromCustomer ? styles.replyHeaderCustomer : styles.replyHeaderAgent
+          ]}>
+            <View style={styles.replyHeaderRow}>
+              <MaterialIcons name="reply" size={16} color={isFromCustomer ? '#4B5563' : '#111827'} />
+              <Text
+                style={[
+                  styles.replyHeaderText,
+                  isFromCustomer ? styles.replyHeaderTextCustomer : styles.replyHeaderTextAgent
+                ]}
+                numberOfLines={1}
+              >
+                Bạn đã trả lời {replyTo.author || 'tin nhắn'}
+              </Text>
+            </View>
+            {!!replyTo.content && (
+              <Text
+                style={[
+                  styles.replyHeaderSnippet,
+                  isFromCustomer ? styles.replyHeaderSnippetCustomer : styles.replyHeaderSnippetAgent
+                ]}
+                numberOfLines={1}
+              >
+                {replyTo.content}
+              </Text>
+            )}
+          </View>
+        )}
+
         <Pressable
           onLongPress={() => {
             const id = messageId || (metadata?.id as string);
@@ -357,6 +474,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
           style={({ pressed }) => [
             styles.messageBubble,
             isFromCustomer ? styles.messageBubbleCustomer : styles.messageBubbleAgent,
+            isImageMessage ? styles.imageMessageWrapper : null,
             pressed ? { opacity: 0.98 } : null,
           ]}
         >
@@ -410,7 +528,9 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
           <Text
             style={[
               styles.messageTime,
-              isFromCustomer ? styles.messageTimeCustomer : styles.messageTimeAgent,
+              isImageMessage
+                ? styles.messageTimeNeutral
+                : (isFromCustomer ? styles.messageTimeCustomer : styles.messageTimeAgent),
             ]}
           >
             {formatTime(sentAt)}
@@ -482,9 +602,18 @@ const styles = StyleSheet.create({
   messageTimeAgent: {
     color: 'rgba(255, 255, 255, 0.8)',
   },
+  messageTimeNeutral: {
+    color: '#6B7280',
+  },
+  imageMessageWrapper: {
+    backgroundColor: 'transparent',
+    padding: 0,
+    borderRadius: 0,
+  },
+  imageContainer: {
+    maxWidth: '100%',
+  },
   imageAttachment: {
-    width: 200,
-    height: 200,
     borderRadius: 12,
     marginBottom: 8,
   },
@@ -678,6 +807,80 @@ const styles = StyleSheet.create({
   actionMenuDanger: {
     color: '#EF4444',
     fontWeight: '600',
+  },
+  replyHeader: {
+    marginBottom: 4,
+  },
+  replyHeaderCustomer: {
+    alignSelf: 'flex-start',
+  },
+  replyHeaderAgent: {
+    alignSelf: 'flex-end',
+  },
+  replyHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  replyHeaderText: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  replyHeaderTextCustomer: {
+    color: '#1F2937',
+  },
+  replyHeaderTextAgent: {
+    color: '#111827',
+  },
+  replyHeaderSnippet: {
+    fontSize: 12,
+    marginTop: 1,
+  },
+  replyHeaderSnippetCustomer: {
+    color: '#374151',
+  },
+  replyHeaderSnippetAgent: {
+    color: '#374151',
+  },
+  replyWrap: {
+    marginBottom: 6,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderWidth: 1,
+  },
+  replyWrapCustomer: {
+    backgroundColor: '#F9FAFB',
+    borderColor: '#E5E7EB',
+  },
+  replyWrapAgent: {
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderColor: 'rgba(255,255,255,0.25)',
+  },
+  replyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 2,
+  },
+  replyLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  replyLabelCustomer: {
+    color: '#374151',
+  },
+  replyLabelAgent: {
+    color: 'rgba(255,255,255,0.95)',
+  },
+  replySnippet: {
+    fontSize: 12,
+  },
+  replySnippetCustomer: {
+    color: '#6B7280',
+  },
+  replySnippetAgent: {
+    color: 'rgba(255,255,255,0.85)',
   },
 });
 

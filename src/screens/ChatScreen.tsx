@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -21,6 +21,9 @@ import {
 import { MaterialIcons, FontAwesome, FontAwesome5, Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { chatApi, Conversation, Message } from '../services/apiChat';
+import { API_BASE_URL } from '../services/api';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { io, Socket } from 'socket.io-client';
 import { apiLabel, MessageLabel as MsgLabel, TopLabel, Label } from '../services/apiLabel';
 import { reactionApi, Reaction, ReactionSummary } from '../services/apiReactions';
 import ChatInputBar from '../components/Chat/ChatInputBar';
@@ -50,6 +53,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
   const [topLabelsMap, setTopLabelsMap] = useState<Record<string, TopLabel[]>>({});
   const [messageLabelsMap, setMessageLabelsMap] = useState<Record<string, MsgLabel[]>>({});
   const [convExtraLabelsMap, setConvExtraLabelsMap] = useState<Record<string, number>>({});
+  const [convLastMessageMap, setConvLastMessageMap] = useState<Record<string, string>>({});
   const [labelsModalVisible, setLabelsModalVisible] = useState(false);
   const [labelsModalItems, setLabelsModalItems] = useState<TopLabel[]>([]);
   const [labelsModalTitle, setLabelsModalTitle] = useState<string>('');
@@ -59,6 +63,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
   const [msgLabelsAll, setMsgLabelsAll] = useState<Label[]>([]);
   const [msgLabelsMessageId, setMsgLabelsMessageId] = useState<string | null>(null);
   const [msgLabelsTitle, setMsgLabelsTitle] = useState<string>('');
+  const [msgLabelsSearch, setMsgLabelsSearch] = useState('');
   const [ctxVisible, setCtxVisible] = useState(false);
   const [ctxAnchor, setCtxAnchor] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [ctxMsgId, setCtxMsgId] = useState<string | null>(null);
@@ -73,11 +78,20 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
   const [currentReactingMessage, setCurrentReactingMessage] = useState<string | null>(null);
   const [reactionDetailsVisible, setReactionDetailsVisible] = useState(false);
   const [selectedMessageReactions, setSelectedMessageReactions] = useState<ReactionSummary[]>([]);
+  const [replyContext, setReplyContext] = useState<{ id: string; author?: string; content?: string } | null>(null);
   
   // Toast notification state
   const [toastVisible, setToastVisible] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
   const toastOpacity = useRef(new Animated.Value(0)).current;
+  
+  // WebSocket realtime
+  const socketRef = useRef<Socket | null>(null);
+  const selectedConvIdRef = useRef<string | null>(null);
+  const prevConvIdRef = useRef<string | null>(null);
+  const locallyClearedUnreadRef = useRef<Record<string, boolean>>({});
+  const READ_OVERRIDES_KEY = 'chat_read_overrides_v1';
+  const [readOverrideMap, setReadOverrideMap] = useState<Record<string, string>>({});
   
   // Real-time polling
   const [isPolling, setIsPolling] = useState(false);
@@ -97,6 +111,68 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
     return '#FFFFFF';
   };
 
+  // Load/save read overrides
+  const loadReadOverrides = async () => {
+    try {
+      const raw = await AsyncStorage.getItem(READ_OVERRIDES_KEY);
+      if (raw) setReadOverrideMap(JSON.parse(raw));
+      else setReadOverrideMap({});
+    } catch {
+      setReadOverrideMap({});
+    }
+  };
+
+  const saveReadOverride = async (conversationId: string, iso: string) => {
+    setReadOverrideMap((prev) => {
+      const next = { ...prev, [conversationId]: iso };
+      AsyncStorage.setItem(READ_OVERRIDES_KEY, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  };
+
+  const applyReadOverrides = (list: any[]) => {
+    return list.map((c: any) => {
+      const lastRaw: any = c.lastActivityAt || c.lastMessageAt || c.updatedAt || c.createdAt;
+      const lastTime = parseMessageDate(lastRaw).getTime();
+      const clearedIso = readOverrideMap[c.id];
+      const clearedTime = clearedIso ? new Date(clearedIso).getTime() : 0;
+      if (locallyClearedUnreadRef.current[c.id] || clearedTime >= lastTime) {
+        return { ...c, unreadCount: 0 };
+      }
+      return c;
+    });
+  };
+
+  useEffect(() => { loadReadOverrides(); }, []);
+  useEffect(() => {
+    // Re-apply when overrides change
+    setConversations((prev) => applyReadOverrides(prev as any));
+  }, [readOverrideMap]);
+
+  // Open a conversation and clear its unread counter locally
+  const openConversation = (conversation: Conversation) => {
+    try {
+      setSelectedConversation({ ...(conversation as any), unreadCount: 0 } as any);
+      setConversations((prev) =>
+        prev.map((c) => (c.id === conversation.id ? ({ ...(c as any), unreadCount: 0 } as any) : c))
+      );
+      // best-effort mark as read
+      try { chatApi.markAsRead(conversation.id); } catch {}
+      // persist local cleared state
+      locallyClearedUnreadRef.current[conversation.id] = true;
+      saveReadOverride(conversation.id, new Date().toISOString());
+    } catch {}
+  };
+
+  // Ensure clearing unread when selection changes
+  useEffect(() => {
+    const id = selectedConversation?.id;
+    if (!id) return;
+    setConversations((prev) => prev.map((c) => (c.id === id ? ({ ...(c as any), unreadCount: 0 } as any) : c)));
+    locallyClearedUnreadRef.current[id] = true;
+    saveReadOverride(id, new Date().toISOString());
+  }, [selectedConversation?.id]);
+
   // Real-time polling functions
   const startPolling = (conversationId: string) => {
     if (pollingIntervalRef.current) {
@@ -110,7 +186,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
         const newMessages = await chatApi.pollMessages(conversationId, lastMessageId);
         
         if (newMessages.length > 0) {
-          console.log('[Polling] Received new messages:', newMessages.length);
+          // console.log('[Polling] Received new messages:', newMessages.length);
           setMessages(prev => [...prev, ...newMessages]);
           
           // Scroll to bottom khi có tin nhắn mới
@@ -144,7 +220,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
     if (selectedConversation) {
       // TODO: Enable polling khi backend có API /poll
       // startPolling(selectedConversation.id);
-      console.log('[Polling] Disabled - waiting for backend API implementation');
+      // console.log('[Polling] Disabled - waiting for backend API implementation');
     } else {
       stopPolling();
     }
@@ -154,11 +230,204 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
     };
   }, [selectedConversation?.id]);
 
+  // Parse message date robustly: if string lacks timezone, treat as UTC
+  const parseMessageDate = (raw: any): Date => {
+    if (!raw) return new Date();
+    if (raw instanceof Date) return raw;
+    const s = String(raw);
+    // If already contains timezone info (Z or +hh:mm / -hh:mm), parse directly
+    if (/Z$/i.test(s) || /[\+\-]\d{2}:?\d{2}$/.test(s)) {
+      const d = new Date(s);
+      return isNaN(d.getTime()) ? new Date() : d;
+    }
+    // Normalize common formats without timezone to UTC by appending Z
+    if (/^\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(s)) {
+      const d = new Date(s.replace(' ', 'T') + 'Z');
+      return isNaN(d.getTime()) ? new Date() : d;
+    }
+    const d = new Date(s);
+    return isNaN(d.getTime()) ? new Date() : d;
+  };
+
+  // Keep ref of current conversation id for ws handlers
+  useEffect(() => {
+    selectedConvIdRef.current = selectedConversation?.id || null;
+  }, [selectedConversation?.id]);
+
+  // Initialize Socket.IO connection
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const token = await AsyncStorage.getItem('access_token');
+        const socket = io(`${API_BASE_URL}/chat`, {
+          transports: ['websocket'],
+          autoConnect: true,
+          auth: { token },
+        });
+        if (!active) return;
+        socketRef.current = socket;
+
+        socket.on('connect', () => {
+          const currentId = selectedConvIdRef.current;
+          if (currentId) {
+            socket.emit('joinConversation', { conversationId: currentId });
+          }
+        });
+
+        socket.on('newMessage', (msg: any) => {
+          const currentId = selectedConvIdRef.current;
+
+          // Helper: derive preview label from message
+          const previewFromMsg = (() => {
+            const content = String(msg?.content || '').trim();
+            if (content) return content;
+            const ct = String(msg?.contentType || '').toLowerCase();
+            if (ct === 'image') return '[Ảnh]';
+            if (ct === 'file') return '[Tệp]';
+            if (ct === 'voice') return '[Voice]';
+            if (ct === 'email') return '[Email]';
+            if (msg?.metadata?.attachments?.files?.length) return '[Tệp]';
+            return '';
+          })();
+
+          // Update conversation list (preview, unread, last activity) and reorder to top
+          setConversations((prev) => {
+            const idx = prev.findIndex((c) => c.id === msg?.conversationId);
+            if (idx === -1) return prev;
+            const conv: any = prev[idx] || {};
+            const isActive = currentId === msg?.conversationId;
+            const now = parseMessageDate(msg?.sentAt || msg?.createdAt || new Date());
+            const nextUnread = isActive
+              ? 0
+              : (conv.unreadCount || 0) + (msg?.senderType === 'customer' ? 1 : 0);
+            const updated: any = {
+              ...conv,
+              lastMessage: {
+                content: previewFromMsg || conv?.lastMessage?.content || '',
+                senderType: msg?.senderType || conv?.lastMessage?.senderType || 'customer',
+              },
+              lastMessageAt: now,
+              lastActivityAt: now,
+              updatedAt: now,
+              unreadCount: nextUnread,
+            };
+            const rest = prev.filter((c) => c.id !== msg?.conversationId);
+            return [updated, ...rest];
+          });
+
+          // Update preview cache map
+          if (previewFromMsg) {
+            setConvLastMessageMap((m) => ({ ...m, [msg.conversationId]: previewFromMsg }));
+          }
+
+          // If currently viewing this conversation, also append the message in the chat view and keep unread = 0
+          if (currentId && msg?.conversationId === currentId) {
+            setMessages((prev) => {
+              if (!msg?.id || prev.some((m) => m.id === msg.id)) return prev;
+              return [...prev, msg as Message];
+            });
+            // Scroll to bottom (inverted list -> offset 0)
+            setTimeout(() => {
+              flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+            }, 80);
+            // If the incoming message is from customer while this conversation is open,
+            // mark it as read on backend and keep unread badge at 0 persistently
+            if (String(msg?.senderType).toLowerCase() === 'customer') {
+              try { chatApi.markAsRead(currentId); } catch {}
+              locallyClearedUnreadRef.current[currentId] = true;
+              saveReadOverride(currentId, parseMessageDate(msg?.sentAt || msg?.createdAt || new Date()).toISOString());
+              setConversations((prev) => prev.map((c) => c.id === currentId ? ({ ...(c as any), unreadCount: 0 } as any) : c));
+            }
+          }
+        });
+
+        // Optional: message update (reactions/status)
+        socket.on('messageUpdate', (update: any) => {
+          const currentId = selectedConvIdRef.current;
+          if (!currentId || update?.conversationId !== currentId) return;
+          if (!update?.messageId) return;
+          setMessages(prev => prev.map(m => (m.id === update.messageId ? { ...m, ...update } as any : m)));
+        });
+
+        // Conversation-level updates: unreadCount, lastActivityAt, status, etc.
+        socket.on('conversationUpdated', (payload: any) => {
+          if (!payload?.id) return;
+          setConversations((prev) => {
+            const idx = prev.findIndex((c) => c.id === payload.id);
+            if (idx === -1) return prev;
+            const conv: any = prev[idx];
+            const isActive = selectedConvIdRef.current === payload.id;
+            const updated: any = {
+              ...conv,
+              ...payload,
+            };
+            // If this conversation is currently open on this client, force unreadCount to 0
+            if (isActive) updated.unreadCount = 0;
+            // Only reorder to top if lastActivityAt is present (real activity), otherwise keep position
+            if (payload.lastActivityAt) {
+              const rest = prev.filter((c) => c.id !== payload.id);
+              return [updated, ...rest];
+            } else {
+              const next = [...prev];
+              next[idx] = updated;
+              return next;
+            }
+          });
+        });
+
+        socket.on('disconnect', () => {
+          // no-op
+        });
+      } catch (err) {
+        // console.log('[WS] Failed to init socket:', err);
+      }
+    })();
+
+    return () => {
+      active = false;
+      try {
+        socketRef.current?.removeAllListeners();
+        socketRef.current?.disconnect();
+      } catch {}
+      socketRef.current = null;
+    };
+  }, []);
+
+  // Join/leave conversation rooms when selection changes
+  useEffect(() => {
+    const socket = socketRef.current;
+    const nextId = selectedConversation?.id || null;
+    const prevId = prevConvIdRef.current;
+    if (socket) {
+      if (prevId && prevId !== nextId) {
+        socket.emit('leaveConversation', { conversationId: prevId });
+      }
+      if (nextId) {
+        socket.emit('joinConversation', { conversationId: nextId });
+      }
+    }
+    prevConvIdRef.current = nextId;
+  }, [selectedConversation?.id]);
+
+  // In list view, join all conversation rooms to receive realtime updates
+  const convIdSignature = useMemo(() => conversations.map(c => c.id).sort().join(','), [conversations]);
+  useEffect(() => {
+    const socket = socketRef.current;
+    if (!socket) return;
+    if (!selectedConversation && conversations.length > 0) {
+      conversations.forEach(c => {
+        try { socket.emit('joinConversation', { conversationId: c.id }); } catch {}
+      });
+    }
+  }, [convIdSignature, selectedConversation]);
+
   const openMessageLabelPicker = async (messageId: string) => {
     setMsgLabelsVisible(true);
     setMsgLabelsMessageId(messageId);
     setMsgLabelsTitle('Gắn nhãn cho tin nhắn');
     setMsgLabelsLoading(true);
+    setMsgLabelsSearch('');
     try {
       const res = await apiLabel.getLabels({ limit: 200 });
       setMsgLabelsAll(res.data || []);
@@ -184,8 +453,9 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
         setMessageLabelsMap(next);
       } else {
         const created = await apiLabel.assignLabelToMessage({ messageId, labelId: label.id });
+        const enriched = { ...created, label } as MsgLabel; // attach full label so UI shows name instead of ID
         const next = { ...(messageLabelsMap || {}) };
-        next[messageId] = [...(next[messageId] || []), created];
+        next[messageId] = [...(next[messageId] || []), enriched];
         setMessageLabelsMap(next);
       }
     } catch (e) {
@@ -195,8 +465,11 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
 
   const handleReply = (messageId: string) => {
     const m = messages.find((x) => x.id === messageId);
-    const quote = (m?.content || '').split('\n').map((l) => `> ${l}`).join('\n');
-    setMessageText(quote ? `${quote}\n` : '');
+    const content = (m?.content || '').replace(/\s+/g, ' ').trim().slice(0, 90);
+    const author = m?.senderType === 'customer'
+      ? ((selectedConversation?.customer as any)?.fullName || (selectedConversation?.customer as any)?.name || 'Khách hàng')
+      : 'Bạn';
+    setReplyContext({ id: messageId, author, content });
   };
 
   const handleTranslate = (messageId: string) => {
@@ -334,20 +607,70 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
       // console.log('[ChatScreen] Loaded conversations:', response.data.length);
       
       // Debug platform info
-      if (response.data.length > 0) {
-        const firstConv = response.data[0];
-        console.log('[ChatScreen] First conversation channel:', firstConv.channel);
-        console.log('[ChatScreen] Platform name:', 
-          (firstConv.channel as any)?.socialNetwork?.name || 
-          (firstConv.channel as any)?.social?.platform || 
-          'unknown'
-        );
-      }
+      // if (response.data.length > 0) {
+      //   const firstConv = response.data[0];
+      //   console.log('[ChatScreen] First conversation channel:', firstConv.channel);
+      //   console.log('[ChatScreen] Platform name:', 
+      //     (firstConv.channel as any)?.socialNetwork?.name || 
+      //     (firstConv.channel as any)?.social?.platform || 
+      //     'unknown'
+      //   );
+      // }
       
-      setConversations(response.data);
+      // Apply local + persisted unread clear overrides before setting state
+      const original = response.data;
+      const mergedConvs = applyReadOverrides(
+        original.map((c: any) =>
+          locallyClearedUnreadRef.current[c.id] ? { ...c, unreadCount: 0 } : c
+        )
+      );
+      setConversations(mergedConvs);
+      // Backend sync: if original had unreadCount>0 but overrides forced it to 0, call markAsRead to sync DB
+      try {
+        const toSync = original.filter((c: any, idx: number) => (c.unreadCount || 0) > 0 && (mergedConvs[idx]?.unreadCount || 0) === 0);
+        for (const c of toSync.slice(0, 10)) { // limit to 10 to avoid spam
+          try { chatApi.markAsRead(c.id); } catch {}
+        }
+      } catch {}
+      // Fetch last message preview for first conversations (limited to reduce requests)
+      try {
+        const convsForPreview = response.data.slice(0, 12);
+        const pairs = await Promise.all(
+          convsForPreview.map(async (c) => {
+            try {
+              const res = await chatApi.getMessages(c.id, { limit: 100 });
+              const list = res.data || [];
+              let last: any = null;
+              for (const m of list) {
+                const raw: any = (m as any)?.sentAt || (m as any)?.createdAt || (m as any)?.deliveredAt || (m as any)?.readAt;
+                const t = parseMessageDate(raw).getTime();
+                if (!last || t > last.t) last = { t, m };
+              }
+              let preview = '';
+              if (last?.m) {
+                const lm: any = last.m;
+                preview = String(lm.content || '').trim();
+                if (!preview) {
+                  const ct = String(lm.contentType || '').toLowerCase();
+                  if (ct === 'image') preview = '[Ảnh]';
+                  else if (ct === 'file') preview = '[Tệp]';
+                  else if (ct === 'voice') preview = '[Voice]';
+                  else if (ct === 'email') preview = '[Email]';
+                }
+              }
+              return { id: c.id, preview };
+            } catch {
+              return { id: c.id, preview: '' };
+            }
+          })
+        );
+        const map: Record<string, string> = {};
+        pairs.forEach(p => { if (p.preview) map[p.id] = p.preview; });
+        setConvLastMessageMap(map);
+      } catch {}
       // Load top labels for conversations (best-effort)
       try {
-        const convs = response.data.slice(0, 20); // limit to 20 to avoid too many requests
+        const convs = mergedConvs.slice(0, 20); // limit to 20 to avoid too many requests
         const results = await Promise.all(
           convs.map(async (c) => {
             try {
@@ -366,7 +689,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
       }
       // Compute extras count (+N) using all labels for first 15 conversations
       try {
-        const convs = response.data.slice(0, 15);
+        const convs = mergedConvs.slice(0, 15);
         const extraPairs = await Promise.all(
           convs.map(async (c) => {
             try {
@@ -455,7 +778,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
 
   // Copy message content
   const handleCopy = (content: string) => {
-    console.log('Copying content:', content);
+    // console.log('Copying content:', content);
     
     // Hiển thị toast thay vì Alert
     showToast('Đã sao chép tin nhắn');
@@ -482,8 +805,10 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
       
       // Sort messages by sentAt (oldest to newest)
       const sortedMessages = [...response.data].sort((a, b) => {
-        const dateA = new Date(a.sentAt).getTime();
-        const dateB = new Date(b.sentAt).getTime();
+        const aRaw: any = (a as any)?.sentAt || (a as any)?.createdAt || (a as any)?.deliveredAt || (a as any)?.readAt;
+        const bRaw: any = (b as any)?.sentAt || (b as any)?.createdAt || (b as any)?.deliveredAt || (b as any)?.readAt;
+        const dateA = parseMessageDate(aRaw).getTime();
+        const dateB = parseMessageDate(bRaw).getTime();
         return dateA - dateB;
       });
       
@@ -491,6 +816,14 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
       // console.log('[ChatScreen] Last message date:', sortedMessages[sortedMessages.length - 1]?.sentAt);
       
       setMessages(sortedMessages);
+      // Clear unread locally for this conversation
+      setConversations((prev) => prev.map((c) => (c.id === conversationId ? ({ ...(c as any), unreadCount: 0 } as any) : c)));
+      // Persist read override up to the last message time
+      try {
+        const last = sortedMessages[sortedMessages.length - 1];
+        const lastRaw: any = (last as any)?.sentAt || (last as any)?.createdAt || (last as any)?.deliveredAt || (last as any)?.readAt || new Date();
+        saveReadOverride(conversationId, parseMessageDate(lastRaw).toISOString());
+      } catch {}
       // Load message labels for this conversation (single call)
       try {
         const allLabels = await apiLabel.getConversationMessageLabels(conversationId);
@@ -559,13 +892,21 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
         conversationId: selectedConversation.id,
         content: messageText.trim(),
         contentType: 'text',
+        replyToMessageId: replyContext?.id,
         sendToSocialNetwork: true, // Gửi qua webhook đến social network
       });
 
       if (result.success && result.message) {
-        // Thành công - thêm tin nhắn vào danh sách
-        setMessages([...messages, result.message]);
+        // Thành công - thêm tin nhắn vào danh sách (enrich with reply info for immediate UI)
+        const enriched: any = { ...result.message };
+        if (replyContext?.id) {
+          enriched.replyToMessageId = replyContext.id;
+          const original = messages.find(m => m.id === replyContext.id);
+          if (original) enriched.replyToMessage = original;
+        }
+        setMessages([...messages, enriched]);
         setMessageText('');
+        setReplyContext(null);
         
         // Hiển thị thông báo thành công
         showToast('Tin nhắn đã được gửi!');
@@ -659,18 +1000,25 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
 
   const formatTime = (date: Date) => {
     const now = new Date();
-    const messageDate = new Date(date);
-    const diffMs = now.getTime() - messageDate.getTime();
+    const d = new Date(date);
+    let diffMs = now.getTime() - d.getTime();
+    if (!isFinite(diffMs)) diffMs = 0;
+    if (diffMs < 0) diffMs = 0; // tránh thời gian tương lai do lệch clock
     const diffMins = Math.floor(diffMs / 60000);
     const diffHours = Math.floor(diffMs / 3600000);
     const diffDays = Math.floor(diffMs / 86400000);
 
     if (diffMins < 1) return 'Vừa xong';
-    if (diffMins < 60) return `${diffMins} phút`;
-    if (diffHours < 24) return `${diffHours} giờ`;
-    if (diffDays < 7) return `${diffDays} ngày`;
-    
-    return messageDate.toLocaleDateString('vi-VN');
+    if (diffMins < 60) return `${diffMins} phút trước`;
+    if (diffHours < 24) return `${diffHours} giờ trước`;
+    if (diffDays < 7) return `${diffDays} ngày trước`;
+
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const yyyy = d.getFullYear();
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mi = String(d.getMinutes()).padStart(2, '0');
+    return `${dd}/${mm}/${yyyy} ${hh}:${mi}`;
   };
 
   const renderConversationItem = ({ item }: { item: Conversation }) => {
@@ -726,13 +1074,31 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
       lastTime = new Date();
     }
 
-    // Preview text: ưu tiên nội dung tin nhắn cuối, fallback "Chat với ..."
-    const previewText = item.lastMessage?.content || `Chat với ${
-      (item.customer as any)?.phone ||
-      (item.customer as any)?.email ||
-      (item.customer as any)?.name ||
-      'khách hàng'
-    }`;
+    const previewText = (() => {
+      const viaMap = (convLastMessageMap[item.id] || '').trim();
+      if (viaMap) return viaMap;
+      const lm: any = (item as any).lastMessage || {};
+      const candidates = [
+        String(lm.content ?? '').trim(),
+        String((item as any).lastMessageText ?? '').trim(),
+        String((item as any).lastMessagePreview ?? '').trim(),
+        String(lm.text ?? '').trim(),
+        String(lm?.metadata?.transcript ?? '').trim(),
+      ].filter(Boolean);
+      if (candidates.length > 0) return candidates[0];
+      const ct = String(lm.contentType || '').toLowerCase();
+      if (ct === 'image') return '[Ảnh]';
+      if (ct === 'file') return '[Tệp]';
+      if (ct === 'voice') return '[Voice]';
+      if (ct === 'email') return '[Email]';
+      if (lm?.attachments?.files?.length) return '[Tệp]';
+      return `Chat với ${
+        (item.customer as any)?.phone ||
+        (item.customer as any)?.email ||
+        (item.customer as any)?.name ||
+        'khách hàng'
+      }`;
+    })();
 
     const topLabels = topLabelsMap[item.id] || [];
     const extraCount = convExtraLabelsMap[item.id] || 0;
@@ -742,7 +1108,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
           styles.conversationItem,
           selectedConversation?.id === item.id && styles.conversationItemActive,
         ]}
-        onPress={() => setSelectedConversation(item)}
+        onPress={() => openConversation(item)}
       >
         <View style={styles.conversationAvatar}>
           {(item.customer as any)?.avatarUrl ? (
@@ -806,16 +1172,30 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
   const renderMessage = ({ item }: { item: Message }) => {
     const labels = messageLabelsMap[item.id] || [];
     const reactions = messageReactionMap[item.id] || [];
+    // Build reply preview for this message if present
+    const replyId = (item as any)?.replyToMessageId;
+    const replyObj: any = (item as any)?.replyToMessage || messages.find(m => m.id === replyId);
+    const replyAuthor = replyObj
+      ? (replyObj.senderType === 'customer'
+          ? ((selectedConversation?.customer as any)?.fullName || (selectedConversation?.customer as any)?.name || 'Khách hàng')
+          : 'Bạn')
+      : undefined;
+    const replySnippet = replyObj ? String(replyObj.content || '').replace(/\s+/g, ' ').trim().slice(0, 90) : undefined;
+    const sentDate = (() => {
+      const raw: any = (item as any)?.sentAt || (item as any)?.createdAt || (item as any)?.deliveredAt || (item as any)?.readAt;
+      return parseMessageDate(raw);
+    })();
     return (
       <MessageBubble
         content={item.content}
         contentType={item.contentType}
         senderType={item.senderType}
-        sentAt={new Date(item.sentAt)}
+        sentAt={sentDate}
         attachments={item.metadata?.attachments || (item as any).attachments}
         metadata={{ ...item.metadata, __labels: labels }}
         messageId={item.id}
         reactions={reactions}
+        replyTo={replyId ? { author: replyAuthor, content: replySnippet } : null}
         onOpenLabelPicker={openMessageLabelPicker}
         onReply={handleReply}
         onTranslate={handleTranslate}
@@ -828,19 +1208,27 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
     );
   };
 
+  const invertedMessages = useMemo(() => {
+    return [...messages].reverse();
+  }, [messages]);
+
   // Conversation List View
   if (!selectedConversation) {
     return (
       <View style={styles.container}>
         {/* Header */}
-        <LinearGradient colors={['#6D28D9', '#8B5CF6']} style={styles.header}>
+        <LinearGradient colors={['#E0E7FF', '#F5D0FE']} style={styles.header}>
+          <LinearGradient
+            colors={['#60A5FA', '#F472B6']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.topAccentBar}
+          />
           <View style={styles.headerContent}>
-            {onBack && (
-              <TouchableOpacity onPress={onBack} style={styles.backButton}>
-                <MaterialIcons name="arrow-back" size={24} color="#FFFFFF" />
-              </TouchableOpacity>
-            )}
-            <Text style={styles.headerTitle}>Tin nhắn</Text>
+            <TouchableOpacity onPress={onBack || (() => {})} style={styles.backButton}>
+              <MaterialIcons name="arrow-back" size={24} color="#2563EB" />
+            </TouchableOpacity>
+            <Text style={styles.headerTitle}>Đoạn chat</Text>
             <TouchableOpacity 
               style={styles.headerButton}
               onPress={async () => {
@@ -850,10 +1238,10 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
               }}
               disabled={isRefreshing}
             >
-              <MaterialIcons 
-                name="refresh" 
-                size={24} 
-                color="#FFFFFF"
+              <Ionicons 
+                name="create-outline" 
+                size={22} 
+                color="#EC4899"
                 style={isRefreshing ? { opacity: 0.5 } : {}}
               />
             </TouchableOpacity>
@@ -861,17 +1249,17 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
 
           {/* Search Bar */}
           <LinearGradient
-            colors={['rgba(255,255,255,0.22)', 'rgba(255,255,255,0.14)']}
+            colors={['rgba(255,255,255,0.75)', 'rgba(255,255,255,0.45)']}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 1 }}
             style={styles.searchGradient}
           >
             <View style={styles.searchContainer}>
-              <MaterialIcons name="search" size={20} color="#E5E7EB" />
+              <MaterialIcons name="search" size={20} color="#6B7280" />
               <TextInput
                 style={styles.searchInput}
-                placeholder="Tìm kiếm cuộc hội thoại..."
-                placeholderTextColor="#E5E7EB"
+                placeholder="Tìm kiếm"
+                placeholderTextColor="#6B7280"
                 value={searchQuery}
                 onChangeText={setSearchQuery}
               />
@@ -911,6 +1299,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
             renderItem={renderConversationItem}
             keyExtractor={(item) => item.id}
             contentContainerStyle={styles.listContent}
+            extraData={{ convLastMessageMap, topLabelsMap, convExtraLabelsMap }}
             ListEmptyComponent={
               <View style={styles.emptyContainer}>
                 <Text style={styles.emptyIcon}>💬</Text>
@@ -1035,7 +1424,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
       keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
     >
       {/* Chat Header */}
-      <LinearGradient colors={['#3B82F6', '#8B5CF6']} style={styles.chatHeader}>
+      <LinearGradient colors={['#4F46E5', '#9333EA']} style={styles.chatHeader}>
         <View style={styles.chatHeaderLeft}>
           <TouchableOpacity
             onPress={() => setSelectedConversation(null)}
@@ -1119,11 +1508,18 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
 
       {/* Messages List */}
       <FlatList
-        data={[...messages].reverse()}
+        data={invertedMessages}
         renderItem={renderMessage}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.messagesContent}
         inverted={true}
+        removeClippedSubviews={Platform.OS !== 'web'}
+        windowSize={8}
+        initialNumToRender={20}
+        maxToRenderPerBatch={10}
+        updateCellsBatchingPeriod={50}
+        maintainVisibleContentPosition={{ minIndexForVisible: 1, autoscrollToTopThreshold: 50 } as any}
+        scrollEventThrottle={16}
         ListEmptyComponent={
           <View style={styles.emptyMessagesContainer}>
             <MaterialIcons name="chat-bubble-outline" size={64} color="#D1D5DB" />
@@ -1134,6 +1530,26 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
           </View>
         }
       />
+
+      {/* Reply Banner */}
+      {replyContext && (
+        <View style={styles.replyBar}>
+          <View style={styles.replyAccent} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.replyTitle} numberOfLines={1}>
+              Đang trả lời {replyContext.author || 'tin nhắn'}
+            </Text>
+            {!!replyContext.content && (
+              <Text style={styles.replySnippet} numberOfLines={1}>
+                {replyContext.content}
+              </Text>
+            )}
+          </View>
+          <TouchableOpacity onPress={() => setReplyContext(null)} style={styles.replyClose}>
+            <MaterialIcons name="close" size={18} color="#6B7280" />
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Input Bar - Enhanced with Upload */}
       <ChatInputBar
@@ -1149,11 +1565,13 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
               conversationId: selectedConversation.id,
               content: message,
               contentType: 'text',
+              replyToMessageId: replyContext?.id,
               sendToSocialNetwork: true,
             });
             
             if (result.success && result.message) {
               setMessages([...messages, result.message]);
+              setReplyContext(null);
               showToast('Tin nhắn đã được gửi!');
             } else {
               const errorMsg = result.userMessage || result.error || 'Không thể gửi tin nhắn';
@@ -1175,7 +1593,14 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
           try {
             if (uploadResult.message) {
               // Nếu có message trong response, thêm vào danh sách
-              setMessages([...messages, uploadResult.message]);
+              const enriched: any = { ...uploadResult.message };
+              if (replyContext?.id) {
+                enriched.replyToMessageId = replyContext.id;
+                const original = messages.find(m => m.id === replyContext.id);
+                if (original) enriched.replyToMessage = original;
+              }
+              setMessages([...messages, enriched]);
+              setReplyContext(null);
               showToast('File đã được gửi!');
             } else {
               // Nếu không có message, refresh lại danh sách messages
@@ -1229,46 +1654,75 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
             {/* Reaction pill - compact with animation */}
             {(() => {
               const screen = Dimensions.get('window');
-              const pillWidth = 200;
+              // Calculate pill width to wrap only 6 emojis (exclude '+')
+              const EMOJI_COUNT = 6;
+              const EMOJI_BTN = 32; // styles.ctxEmojiButton size
+              const PLUS_W = 28;    // styles.ctxPlus size
+              const GAP = 4;        // styles.ctxReactionPill gap
+              const PADDING_H = 16; // paddingHorizontal = 8 * 2
+              const PADDING_V = 8;  // paddingVertical
+
+              const pillWidth = EMOJI_COUNT * EMOJI_BTN + (EMOJI_COUNT - 1) * GAP + PADDING_H;
+              const pillHeight = EMOJI_BTN + PADDING_V * 2;
+
               const pillLeft = Math.min(
                 Math.max(ctxAnchor.x + ctxAnchor.width / 2 - pillWidth / 2, 12),
                 screen.width - pillWidth - 12
               );
               const pillTop = Math.max(ctxAnchor.y - 48, 12);
+
+              // Position '+' outside, to the immediate right of the pill
+              const plusGap = 6;
+              const plusLeft = Math.min(pillLeft + pillWidth + plusGap, screen.width - PLUS_W - 12);
+              const plusTop = pillTop + Math.max(0, Math.round((pillHeight - PLUS_W) / 2));
+
               return (
-                <Animated.View 
-                  style={[
-                    styles.ctxReactionPill, 
-                    { 
-                      top: pillTop, 
-                      left: pillLeft, 
-                      width: pillWidth,
-                      transform: [{ scale: pillScale }],
-                      opacity: overlayOpacity,
-                    }
-                  ]}
-                >
-                  {['❤️','😂','😮','😢','😡','👍'].map((emj, idx) => (
-                    <TouchableOpacity 
-                      key={idx} 
-                      onPress={() => { 
-                        if (ctxMsgId) {
-                          handleAddReaction(ctxMsgId, emj);
-                        }
-                        closeContext();
-                      }}
-                      style={styles.ctxEmojiButton}
-                    >
-                      <Text style={styles.ctxEmoji}>{emj}</Text>
-                    </TouchableOpacity>
-                  ))}
-                  <TouchableOpacity 
-                    onPress={() => { Alert.alert('Thêm cảm xúc', 'Sắp có'); closeContext(); }} 
-                    style={styles.ctxPlus}
+                <>
+                  <Animated.View 
+                    style={[
+                      styles.ctxReactionPill, 
+                      { 
+                        top: pillTop, 
+                        left: pillLeft, 
+                        width: pillWidth,
+                        transform: [{ scale: pillScale }],
+                        opacity: overlayOpacity,
+                      }
+                    ]}
                   >
-                    <MaterialIcons name="add" size={18} color="#FFFFFF" />
-                  </TouchableOpacity>
-                </Animated.View>
+                    {['❤️','😂','😮','😢','😡','👍'].map((emj, idx) => (
+                      <TouchableOpacity 
+                        key={idx} 
+                        onPress={() => { 
+                          if (ctxMsgId) {
+                            handleAddReaction(ctxMsgId, emj);
+                          }
+                          closeContext();
+                        }}
+                        style={styles.ctxEmojiButton}
+                      >
+                        <Text style={styles.ctxEmoji}>{emj}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </Animated.View>
+
+                  <Animated.View
+                    style={{
+                      position: 'absolute',
+                      top: plusTop,
+                      left: plusLeft,
+                      opacity: overlayOpacity,
+                      transform: [{ scale: pillScale }],
+                    }}
+                  >
+                    <TouchableOpacity 
+                      onPress={() => { Alert.alert('Thêm cảm xúc', 'Sắp có'); closeContext(); }} 
+                      style={styles.ctxPlus}
+                    >
+                      <MaterialIcons name="add" size={18} color="#FFFFFF" />
+                    </TouchableOpacity>
+                  </Animated.View>
+                </>
               );
             })()}
 
@@ -1357,6 +1811,103 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
         onAddReaction={handleAddReaction}
         onRemoveReaction={handleRemoveReaction}
       />
+      <Modal
+        visible={msgLabelsVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setMsgLabelsVisible(false)}
+      >
+        <TouchableWithoutFeedback onPress={() => setMsgLabelsVisible(false)}>
+          <View style={styles.modalBackdrop}>
+            <TouchableWithoutFeedback>
+              <View style={styles.modalSheet}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>{msgLabelsTitle || 'Gắn nhãn cho tin nhắn'}</Text>
+                  <TouchableOpacity onPress={() => setMsgLabelsVisible(false)} style={styles.modalCloseBtn}>
+                    <MaterialIcons name="close" size={20} color="#111827" />
+                  </TouchableOpacity>
+                </View>
+                {msgLabelsLoading ? (
+                  <View style={{ paddingVertical: 16, alignItems: 'center' }}>
+                    <ActivityIndicator size="small" color="#3B82F6" />
+                  </View>
+                ) : (
+                  <ScrollView contentContainerStyle={[styles.modalContent, { paddingTop: 0 }] }>
+                    <View style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      backgroundColor: '#F3F4F6',
+                      borderRadius: 10,
+                      paddingHorizontal: 10,
+                      paddingVertical: 8,
+                      borderWidth: 1,
+                      borderColor: '#E5E7EB',
+                      marginBottom: 10,
+                    }}>
+                      <MaterialIcons name="search" size={18} color="#6B7280" />
+                      <TextInput
+                        style={{ flex: 1, marginLeft: 8, fontSize: 14, color: '#111827' }}
+                        placeholder="Tìm nhãn..."
+                        placeholderTextColor="#9CA3AF"
+                        value={msgLabelsSearch}
+                        onChangeText={setMsgLabelsSearch}
+                      />
+                    </View>
+
+                    {(!msgLabelsAll || msgLabelsAll.length === 0) ? (
+                      <Text style={{ color: '#6B7280' }}>Không có nhãn</Text>
+                    ) : (
+                      (() => {
+                        const search = (msgLabelsSearch || '').trim().toLowerCase();
+                        let list = msgLabelsAll.filter(lb => !search || (lb.name || '').toLowerCase().includes(search));
+                        const mid = msgLabelsMessageId;
+                        list = list.sort((a, b) => {
+                          const aActive = mid ? isLabelAssigned(mid, a.id) : false;
+                          const bActive = mid ? isLabelAssigned(mid, b.id) : false;
+                          if (aActive !== bActive) return aActive ? -1 : 1; // selected first
+                          return (a.name || '').localeCompare(b.name || '');
+                        });
+                        return (
+                          <View style={[styles.modalChipsWrap, { gap: 8 }]}>
+                            {list.map((lb) => {
+                              const active = mid ? isLabelAssigned(mid, lb.id) : false;
+                              const textColor = getTextColorForBg(lb.color || '#6B7280');
+                              return (
+                                <TouchableOpacity
+                                  key={lb.id}
+                                  onPress={() => mid && toggleAssignLabel(mid, lb)}
+                                  activeOpacity={0.85}
+                                  style={{
+                                    marginRight: 4,
+                                    marginBottom: 8,
+                                    borderRadius: 8,
+                                    borderWidth: 2,
+                                    borderColor: active ? '#2563eb' : 'rgba(0,0,0,0.08)',
+                                    backgroundColor: lb.color || '#F3F4F6',
+                                    paddingHorizontal: 10,
+                                    paddingVertical: 6,
+                                    flexDirection: 'row',
+                                    alignItems: 'center',
+                                  }}
+                                >
+                                  <Text style={{ color: textColor, fontSize: 13, fontWeight: '700' }}>{lb.name}</Text>
+                                  {active && (
+                                    <MaterialIcons name="check" size={16} color={textColor} style={{ marginLeft: 6 }} />
+                                  )}
+                                </TouchableOpacity>
+                              );
+                            })}
+                          </View>
+                        );
+                      })()
+                    )}
+                  </ScrollView>
+                )}
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
       
       {/* Toast Notification */}
       {toastVisible && (
@@ -1386,6 +1937,16 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
     paddingHorizontal: 16,
   },
+  topAccentBar: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 3,
+    borderTopLeftRadius: 2,
+    borderTopRightRadius: 2,
+    opacity: 0.98,
+  },
   headerContent: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1399,7 +1960,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 20,
     fontWeight: 'bold',
-    color: '#FFFFFF',
+    color: '#111827',
     flex: 1,
     textAlign: 'center',
   },
@@ -1424,7 +1985,7 @@ const styles = StyleSheet.create({
     flex: 1,
     marginLeft: 8,
     fontSize: 16,
-    color: '#FFFFFF',
+    color: '#111827',
   },
   loadingContainer: {
     flex: 1,
@@ -1857,8 +2418,12 @@ const styles = StyleSheet.create({
   },
   ctxMenuText: { color: '#F3F4F6', fontSize: 15, fontWeight: '500' as '500' },
   ctxEmojiButton: {
+    width: 32,
+    height: 32,
     padding: 4,
     borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   ctxDivider: {
     height: 1,
@@ -1866,6 +2431,45 @@ const styles = StyleSheet.create({
     marginVertical: 4,
   },
   ctxDanger: { color: '#EF4444', fontWeight: '600' as '600' },
+  replyBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginHorizontal: 10,
+    marginBottom: 6,
+  },
+  replyAccent: {
+    width: 3,
+    height: 28,
+    borderRadius: 2,
+    backgroundColor: '#3B82F6',
+  },
+  replyTitle: {
+    color: '#111827',
+    fontWeight: '700',
+    fontSize: 13,
+    marginBottom: 2,
+  },
+  replySnippet: {
+    color: '#6B7280',
+    fontSize: 12,
+  },
+  replyClose: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
   
   // Toast styles
   toast: {

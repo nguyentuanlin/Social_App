@@ -41,7 +41,7 @@ export const uploadApi = {
     conversationId?: string
   ): Promise<UploadResponse> => {
     try {
-      console.log('[Upload API] Uploading file:', file);
+      // console.log('[Upload API] Uploading file:', file);
       
       const formData = new FormData();
 
@@ -123,7 +123,7 @@ export const uploadApi = {
         responseData = response.data;
       }
 
-      console.log('[Upload API] Upload response:', responseData);
+      // console.log('[Upload API] Upload response:', responseData);
       
       // Web app trả về structure phức tạp với message và file info
       
