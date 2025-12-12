@@ -25,6 +25,8 @@ interface ChatInputBarProps {
   onFileUploaded?: (uploadResult: any) => void; // Callback khi upload thành công
   isSending?: boolean;
   conversationId?: string;
+  showContactSuggestionButton?: boolean;
+  onContactSuggestion?: () => void;
 }
 
 const ChatInputBar: React.FC<ChatInputBarProps> = ({
@@ -32,6 +34,8 @@ const ChatInputBar: React.FC<ChatInputBarProps> = ({
   onFileUploaded,
   isSending = false,
   conversationId,
+  showContactSuggestionButton,
+  onContactSuggestion,
 }) => {
   const [messageText, setMessageText] = useState('');
   const [isUploading, setIsUploading] = useState(false);
@@ -410,6 +414,16 @@ const ChatInputBar: React.FC<ChatInputBarProps> = ({
             >
               <MaterialIcons name={isRecording ? "stop" : "mic"} size={20} color={isDisabled ? "#9CA3AF" : (isRecording ? "#EF4444" : "#0084FF")} />
             </TouchableOpacity>
+            {showContactSuggestionButton && onContactSuggestion && (
+              <TouchableOpacity
+                style={[styles.actionCircle, isDisabled && styles.disabledButton]}
+                onPress={onContactSuggestion}
+                disabled={isDisabled}
+                activeOpacity={0.7}
+              >
+                <MaterialIcons name="person" size={20} color={isDisabled ? "#9CA3AF" : "#0084FF"} />
+              </TouchableOpacity>
+            )}
           </Animated.View>
         ) : (
           <TouchableOpacity 

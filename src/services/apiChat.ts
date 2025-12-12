@@ -9,6 +9,14 @@ export interface Conversation {
   lastMessageAt: Date;
   unreadCount: number;
   title?: string;
+  topLabels?: Array<{
+    labelId: string;
+    labelName: string;
+    count: number;
+    color?: string;
+    category?: string;
+  }>;
+  totalLabelCount?: number;
   customer?: {
     id: string;
     name?: string;
@@ -159,6 +167,48 @@ export const chatApi = {
       };
     } catch (error: any) {
       console.error('[Chat API] Error fetching conversations:', error);
+      console.error('[Chat API] Error response:', error.response?.data);
+      throw error;
+    }
+  },
+
+  /**
+   * Lấy danh sách conversations Visitor (web chat)
+   * - Thường không có channelId, metadata.webChat = true
+   */
+  getVisitorConversations: async (params?: {
+    status?: string;
+    priority?: string;
+    search?: string;
+    page?: number;
+    limit?: number;
+  }): Promise<{ data: Conversation[]; total: number }> => {
+    try {
+      console.log('[Chat API] Fetching VISITOR conversations with params:', params);
+
+      const response = await apiClient.get('/chat/conversations/visitor', { params });
+
+      // Chuẩn hoá response về dạng mảng conversations
+      const raw = Array.isArray(response.data)
+        ? response.data
+        : response.data.data || response.data.conversations || [];
+
+      // Chỉ giữ các conversation có customerId (visitor từ web chat)
+      const validConversations = raw.filter((conv: any) => conv.customerId);
+
+      // Sắp xếp theo lastActivityAt (mới nhất trước)
+      validConversations.sort((a: any, b: any) => {
+        const dateA = new Date(a.lastActivityAt || a.updatedAt || a.createdAt).getTime();
+        const dateB = new Date(b.lastActivityAt || b.updatedAt || b.createdAt).getTime();
+        return dateB - dateA;
+      });
+
+      return {
+        data: validConversations,
+        total: validConversations.length,
+      };
+    } catch (error: any) {
+      console.error('[Chat API] Error fetching VISITOR conversations:', error);
       console.error('[Chat API] Error response:', error.response?.data);
       throw error;
     }

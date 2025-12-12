@@ -4,6 +4,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { AuthProvider, useAuth } from './src/contexts/AuthContext';
 import LoginScreen from './src/screens/LoginScreen';
 import HomeScreen from './src/screens/HomeScreen';
+import SSOWebViewScreen from './src/screens/SSOWebViewScreen';
 import { ActivityIndicator, View, StyleSheet } from 'react-native';
 
 const Stack = createNativeStackNavigator();
@@ -21,17 +22,24 @@ function Navigation() {
     <NavigationContainer>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {isAuthenticated ? (
-          <Stack.Screen 
-            name="Home" 
+          <Stack.Screen
+            name="Home"
             component={HomeScreen}
             options={{ animationTypeForReplace: 'pop' }}
           />
         ) : (
-          <Stack.Screen 
-            name="Login" 
-            component={LoginScreen}
-            options={{ animationTypeForReplace: 'push' }}
-          />
+          <>
+            <Stack.Screen
+              name="Login"
+              component={LoginScreen}
+              options={{ animationTypeForReplace: 'push' }}
+            />
+            <Stack.Screen
+              name="SSOLogin"
+              component={SSOWebViewScreen}
+              options={{ animationTypeForReplace: 'push' }}
+            />
+          </>
         )}
       </Stack.Navigator>
       

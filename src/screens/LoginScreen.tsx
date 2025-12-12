@@ -14,7 +14,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
-import { useAzureAuth } from '../hooks/useAzureAuth';
+import { useNavigation } from '@react-navigation/native';
 
 const LoginScreen = () => {
   const [email, setEmail] = useState('');
@@ -22,12 +22,12 @@ const LoginScreen = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const { login, isLoading } = useAuth();
-  const { signInWithAzure, isLoading: isAzureLoading, error: azureError } = useAzureAuth();
+  const navigation = useNavigation();
 
   const handleLogin = async () => {
-    console.log('[LoginScreen] 🔘 Nút đăng nhập được nhấn');
-    console.log('[LoginScreen] 📧 Email:', email);
-    console.log('[LoginScreen] 🔑 Password:', password ? '***' : 'empty');
+    // console.log('[LoginScreen] 🔘 Nút đăng nhập được nhấn');
+    // console.log('[LoginScreen] 📧 Email:', email);
+    // console.log('[LoginScreen] 🔑 Password:', password ? '***' : 'empty');
     
     // Clear previous error
     setErrorMessage('');
@@ -40,9 +40,9 @@ const LoginScreen = () => {
     }
 
     try {
-      console.log('[LoginScreen] 📝 Gọi login từ AuthContext...');
+      // console.log('[LoginScreen] 📝 Gọi login từ AuthContext...');
       await login(email, password);
-      console.log('[LoginScreen] ✅ Login thành công! Navigation sẽ tự động xử lý.');
+      // console.log('[LoginScreen] ✅ Login thành công! Navigation sẽ tự động xử lý.');
       // Navigation sẽ được xử lý tự động bởi App.tsx
     } catch (error: any) {
       console.error('[LoginScreen] ❌ Login thất bại:', error.message);
@@ -51,12 +51,13 @@ const LoginScreen = () => {
     }
   };
 
-  const handleAzureLogin = async () => {
-    try {
-      await signInWithAzure();
-    } catch (error: any) {
-      Alert.alert('Đăng nhập Azure thất bại', error.message);
-    }
+  const handleAzureLogin = () => {
+    console.log('==================== [LoginScreen] Azure SSO ====================');
+    console.log('[LoginScreen] 👉 Nút "Đăng nhập với Azure AD" được ấn');
+    console.log('[LoginScreen] 🌐 Điều hướng sang màn hình SSOLogin (WebView)');
+    // Điều hướng sang màn hình WebView SSO
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (navigation as any).navigate('SSOLogin');
   };
 
   return (
@@ -64,6 +65,9 @@ const LoginScreen = () => {
       colors={['#0EA5E9', '#3B82F6', '#8B5CF6']}
       style={styles.container}
     >
+      {/* Decorative background circles */}
+      <View pointerEvents="none" style={styles.backgroundDecorTop} />
+      <View pointerEvents="none" style={styles.backgroundDecorBottom} />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}
@@ -76,6 +80,9 @@ const LoginScreen = () => {
           <View style={styles.header}>
             <View style={styles.logoContainer}>
               <MaterialCommunityIcons name="chat-processing" size={48} color="#FFFFFF" />
+            </View>
+            <View style={styles.brandBadge}>
+              <Text style={styles.brandBadgeText}>AI Agent Mobile</Text>
             </View>
             <Text style={styles.title}>Social Media CRM</Text>
             <Text style={styles.subtitle}>
@@ -184,17 +191,11 @@ const LoginScreen = () => {
             {/* SSO Button */}
             <TouchableOpacity 
               style={styles.ssoButton} 
-              disabled={isLoading || isAzureLoading}
+              disabled={isLoading}
               onPress={handleAzureLogin}
             >
-              {isAzureLoading ? (
-                <ActivityIndicator color="#374151" size="small" />
-              ) : (
-                <>
-                  <MaterialCommunityIcons name="microsoft-azure" size={20} color="#374151" style={styles.ssoIcon} />
-                  <Text style={styles.ssoButtonText}>Đăng nhập với Azure AD</Text>
-                </>
-              )}
+              <MaterialCommunityIcons name="microsoft-azure" size={20} color="#374151" style={styles.ssoIcon} />
+              <Text style={styles.ssoButtonText}>Đăng nhập với Azure AD</Text>
             </TouchableOpacity>
           </View>
 
@@ -222,6 +223,29 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     justifyContent: 'center',
     padding: 24,
+    alignItems: 'center',
+  },
+  backgroundDecorTop: {
+    position: 'absolute',
+    top: -40,
+    right: -40,
+    width: 160,
+    height: 160,
+    borderRadius: 80,
+    backgroundColor: 'rgba(255, 255, 255, 0.18)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.18,
+    shadowRadius: 20,
+  },
+  backgroundDecorBottom: {
+    position: 'absolute',
+    bottom: -60,
+    left: -60,
+    width: 200,
+    height: 200,
+    borderRadius: 100,
+    backgroundColor: 'rgba(15, 23, 42, 0.12)',
   },
   header: {
     alignItems: 'center',
@@ -256,15 +280,36 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingHorizontal: 32,
   },
+  brandBadge: {
+    marginBottom: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(15, 23, 42, 0.16)',
+    borderWidth: 1,
+    borderColor: 'rgba(148, 163, 184, 0.6)',
+  },
+  brandBadgeText: {
+    fontSize: 11,
+    letterSpacing: 0.5,
+    color: 'rgba(249, 250, 251, 0.95)',
+    fontWeight: '600',
+    textTransform: 'uppercase',
+  },
   formCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 24,
     padding: 24,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
-    elevation: 10,
+    shadowOpacity: 0.18,
+    shadowRadius: 24,
+    elevation: 8,
+    width: '100%',
+    maxWidth: 420,
+    borderWidth: 1,
+    borderColor: 'rgba(226, 232, 240, 0.9)',
+    backgroundColor: 'rgba(255, 255, 255, 0.98)',
   },
   formTitle: {
     fontSize: 24,

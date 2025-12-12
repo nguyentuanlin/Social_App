@@ -1,6 +1,9 @@
 import apiClient from './api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+const SESSION_DURATION_MS = 24 * 60 * 60 * 1000; // 24h
+const SESSION_EXPIRES_AT_KEY = 'session_expires_at';
+
 export interface LoginResponse {
   access_token: string;
 }
@@ -34,10 +37,12 @@ export const authService = {
       // console.log('[AuthService] ✅ Đăng nhập thành công!');
       // console.log('[AuthService] 🎫 Token nhận được:', response.data.access_token ? 'Có' : 'Không');
 
-      // Lưu token vào AsyncStorage
+      // Lưu token + thời gian hết hạn vào AsyncStorage
       if (response.data.access_token) {
         await AsyncStorage.setItem('access_token', response.data.access_token);
-        console.log('[AuthService] 💾 Đã lưu token vào AsyncStorage');
+        const expiresAt = new Date(Date.now() + SESSION_DURATION_MS).toISOString();
+        await AsyncStorage.setItem(SESSION_EXPIRES_AT_KEY, expiresAt);
+        console.log('[AuthService] 💾 Đã lưu token và session_expires_at vào AsyncStorage');
       }
 
       return response.data;
@@ -45,6 +50,14 @@ export const authService = {
       console.error('[AuthService] ❌ Lỗi đăng nhập:', error.message);
       console.error('[AuthService] 📄 Response:', error.response?.data);
       console.error('[AuthService] 🔢 Status:', error.response?.status);
+
+      // Network Error / CORS fail: không có response từ server
+      if (!error.response || error.message === 'Network Error') {
+        throw new Error(
+          'Không thể kết nối tới máy chủ. Vui lòng kiểm tra backend (http://localhost:7000) có đang chạy và cấu hình CORS đúng chưa.'
+        );
+      }
+
       throw new Error(
         error.response?.data?.message || 'Đăng nhập thất bại'
       );
@@ -114,6 +127,7 @@ export const authService = {
       
       await AsyncStorage.removeItem('userData');
       // console.log('[AuthService] 🗑️ Đã xóa userData');
+      await AsyncStorage.removeItem(SESSION_EXPIRES_AT_KEY);
       
       // console.log('[AuthService] ✅ Logout hoàn thành!');
     } catch (error) {
@@ -133,7 +147,23 @@ export const authService = {
    */
   isAuthenticated: async (): Promise<boolean> => {
     const token = await AsyncStorage.getItem('access_token');
-    return !!token;
+    if (!token) return false;
+
+    try {
+      const raw = await AsyncStorage.getItem(SESSION_EXPIRES_AT_KEY);
+      if (raw) {
+        const expires = new Date(raw);
+        if (!isNaN(expires.getTime()) && expires.getTime() <= Date.now()) {
+          // Phiên đã hết hạn → xoá local state
+          await AsyncStorage.removeItem('access_token');
+          await AsyncStorage.removeItem('userData');
+          await AsyncStorage.removeItem(SESSION_EXPIRES_AT_KEY);
+          return false;
+        }
+      }
+    } catch {}
+
+    return true;
   },
 
   /**
@@ -158,15 +188,38 @@ export const authService = {
         token,
       });
 
-      // Lưu token vào AsyncStorage
+      // Lưu token + thời gian hết hạn vào AsyncStorage
       if (response.data.access_token) {
         await AsyncStorage.setItem('access_token', response.data.access_token);
+        const expiresAt = new Date(Date.now() + SESSION_DURATION_MS).toISOString();
+        await AsyncStorage.setItem(SESSION_EXPIRES_AT_KEY, expiresAt);
       }
 
       return response.data;
     } catch (error: any) {
       throw new Error(
         error.response?.data?.message || 'SSO authentication failed'
+      );
+    }
+  },
+
+  /**
+   * Gia hạn phiên làm việc bằng cách refresh JWT
+   */
+  refreshToken: async (): Promise<LoginResponse> => {
+    try {
+      const response = await apiClient.post<LoginResponse>('/auth/refresh');
+
+      if (response.data.access_token) {
+        await AsyncStorage.setItem('access_token', response.data.access_token);
+        const expiresAt = new Date(Date.now() + SESSION_DURATION_MS).toISOString();
+        await AsyncStorage.setItem(SESSION_EXPIRES_AT_KEY, expiresAt);
+      }
+
+      return response.data;
+    } catch (error: any) {
+      throw new Error(
+        error.response?.data?.message || 'Không thể gia hạn phiên đăng nhập'
       );
     }
   },

@@ -9,9 +9,39 @@ export interface DashboardStats {
   pendingConversations: number;
 }
 
+export interface CSITrendData {
+  csiTrend: Array<{
+    date: string;
+    happy: number;
+    neutral: number;
+    sad: number;
+    count: number;
+  }>;
+  summary: {
+    totalHappy: number;
+    totalNeutral: number;
+    totalSad: number;
+    avgCSI: number;
+  };
+  channels: Array<{
+    id: string;
+    name: string;
+    platform: string;
+  }>;
+  seriesByChannel: Array<Record<string, any>>;
+  summaryByChannel: Array<{
+    channelId: string;
+    channelName: string;
+    totalHappy: number;
+    totalNeutral: number;
+    totalSad: number;
+    avgCSI: number;
+  }>;
+}
+
 export const dashboardApi = {
   /**
-   * Lấy thống kê dashboard cho nhân viên
+   * Lấy thống kê dashboard cho nhân viên 
    */
   getEmployeeStats: async (): Promise<DashboardStats> => {
     try {
@@ -54,6 +84,49 @@ export const dashboardApi = {
           pendingConversations: 0,
         };
       }
+    }
+  },
+
+  getCSITrend: async (days: number = 7): Promise<CSITrendData> => {
+    try {
+      const response = await apiClient.get('/dashboard/csi-trend', {
+        params: { days },
+      });
+      console.log('[Dashboard API] CSI trend response:', response.data);
+
+      const raw = response.data as any;
+      const fixed: CSITrendData = {
+        csiTrend: Array.isArray(raw.csiTrend) ? raw.csiTrend : [],
+        summary: raw.summary || {
+          totalHappy: 0,
+          totalNeutral: 0,
+          totalSad: 0,
+          avgCSI: 0,
+        },
+        channels: Array.isArray(raw.channels) ? raw.channels : [],
+        seriesByChannel: Array.isArray(raw.seriesByChannel) ? raw.seriesByChannel : [],
+        summaryByChannel: Array.isArray(raw.summaryByChannel) ? raw.summaryByChannel : [],
+      };
+
+      if (!Array.isArray(raw.seriesByChannel)) {
+        console.warn('[Dashboard API] CSI seriesByChannel is not array, received:', typeof raw.seriesByChannel);
+      }
+
+      return fixed;
+    } catch (error) {
+      console.error('[Dashboard API] CSI error:', error);
+      return {
+        csiTrend: [],
+        summary: {
+          totalHappy: 0,
+          totalNeutral: 0,
+          totalSad: 0,
+          avgCSI: 0,
+        },
+        channels: [],
+        seriesByChannel: [],
+        summaryByChannel: [],
+      };
     }
   },
 };

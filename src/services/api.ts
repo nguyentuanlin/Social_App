@@ -1,8 +1,12 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
 
 // URL Backend - Thay đổi theo IP máy của bạn
-const API_BASE_URL = 'http://localhost:3000'; // Backend chạy cổng 3000
+const API_BASE_URL =
+  Platform.OS === 'android'
+    ? 'http://10.0.2.2:7000'
+    : 'http://localhost:7000'; // Backend chạy cổng 3000c
 
 // Tạo axios instance
 const apiClient: AxiosInstance = axios.create({
@@ -35,6 +39,7 @@ apiClient.interceptors.response.use(
       // Token hết hạn - Xóa token và redirect về login
       await AsyncStorage.removeItem('access_token');
       await AsyncStorage.removeItem('userData');
+      await AsyncStorage.removeItem('session_expires_at');
     }
     return Promise.reject(error);
   }

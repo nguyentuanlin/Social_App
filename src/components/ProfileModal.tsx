@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -15,8 +15,10 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '../contexts/AuthContext';
 import CustomAlert from './CustomAlert';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width } = Dimensions.get('window');
+const SESSION_TOTAL_MS = 24 * 60 * 60 * 1000; // 24h
 
 interface ProfileModalProps {
   visible: boolean;
@@ -26,6 +28,65 @@ interface ProfileModalProps {
 const ProfileModal: React.FC<ProfileModalProps> = ({ visible, onClose }) => {
   const { user, logout } = useAuth();
   const [confirmVisible, setConfirmVisible] = useState(false);
+  const [remainingSession, setRemainingSession] = useState<string | null>(null);
+  const [remainingPercent, setRemainingPercent] = useState<number>(1);
+
+  useEffect(() => {
+    let interval: any = null;
+
+    const updateRemaining = async () => {
+      try {
+        const raw = await AsyncStorage.getItem('session_expires_at');
+        if (!raw) {
+          setRemainingSession(null);
+          return;
+        }
+        const expires = new Date(raw);
+        if (isNaN(expires.getTime())) {
+          setRemainingSession(null);
+          return;
+        }
+
+        const diffMs = expires.getTime() - Date.now();
+        if (diffMs <= 0) {
+          setRemainingSession('Phiên đã hết hạn');
+          setRemainingPercent(0);
+          return;
+        }
+
+        const totalSeconds = Math.floor(diffMs / 1000);
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const seconds = totalSeconds % 60;
+
+        let text = '';
+        if (hours > 0) {
+          text = `Còn ${hours} giờ ${minutes} phút ${seconds} giây`;
+        } else {
+          text = `Còn ${minutes} phút ${seconds} giây`;
+        }
+        setRemainingSession(text);
+
+        const pct = Math.max(0, Math.min(1, diffMs / SESSION_TOTAL_MS));
+        setRemainingPercent(pct);
+      } catch {
+        setRemainingSession(null);
+      }
+    };
+
+    if (visible) {
+      updateRemaining();
+      interval = setInterval(updateRemaining, 1000);
+    } else {
+      setRemainingSession(null);
+    }
+
+    return () => {
+      if (interval) {
+        clearInterval(interval);
+      }
+    };
+  }, [visible]);
 
   const handleLogout = () => {
     // console.log('[ProfileModal] 🎯 handleLogout được gọi');
@@ -133,6 +194,27 @@ const ProfileModal: React.FC<ProfileModalProps> = ({ visible, onClose }) => {
             showsVerticalScrollIndicator={false}
             contentContainerStyle={styles.contentContainer}
           >
+            {/* Session time remaining */}
+            {remainingSession && (
+              <View style={styles.sessionCard}>
+                <View style={styles.sessionHeaderRow}>
+                  <Text style={styles.sessionLabel}>Thời gian còn lại:</Text>
+                  <Text style={styles.sessionValue}>{remainingSession}</Text>
+                </View>
+                <View style={styles.sessionProgressTrack}>
+                  <View
+                    style={[
+                      styles.sessionProgressFill,
+                      { width: `${Math.max(0, Math.min(1, remainingPercent)) * 100}%` },
+                    ]}
+                  />
+                </View>
+                <Text style={styles.sessionHint}>
+                  Phiên sẽ tự động hết hạn để đảm bảo an toàn.
+                </Text>
+              </View>
+            )}
+
             {/* Info Cards */}
             <View style={styles.infoCard}>
               <View style={styles.infoItem}>
@@ -259,13 +341,17 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   overlayTouchable: {
-    flex: 1,
+    // Giữ một vùng nhỏ phía trên để tap đóng modal, phần còn lại ưu tiên cho nội dung
+    flex: 0.25,
   },
   modalContainer: {
+    // Tăng tỷ lệ chiều cao modal để ít phải cuộn hơn
+    flex: 0.75,
     backgroundColor: '#F9FAFB',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    maxHeight: '90%',
+    maxHeight: '92%',
+    minHeight: '70%',
     width: '100%',
   },
   coverContainer: {
@@ -338,6 +424,55 @@ const styles = StyleSheet.create({
   userEmail: {
     fontSize: 14,
     color: '#6B7280',
+  },
+  sessionInfo: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginTop: 4,
+  },
+  sessionCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  sessionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  sessionLabel: {
+    fontSize: 13,
+    color: '#4B5563',
+    fontWeight: '500',
+  },
+  sessionValue: {
+    fontSize: 13,
+    color: '#2563EB',
+    fontWeight: '600',
+  },
+  sessionProgressTrack: {
+    height: 6,
+    borderRadius: 9999,
+    backgroundColor: '#E5E7EB',
+    overflow: 'hidden',
+  },
+  sessionProgressFill: {
+    height: '100%',
+    borderRadius: 9999,
+    backgroundColor: '#3B82F6',
+  },
+  sessionHint: {
+    marginTop: 4,
+    fontSize: 11,
+    color: '#9CA3AF',
+    textAlign: 'right',
   },
   content: {
     flex: 1,

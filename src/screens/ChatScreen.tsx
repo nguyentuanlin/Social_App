@@ -97,6 +97,11 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
   const [isPolling, setIsPolling] = useState(false);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Source of conversations: external social channels vs Visitor (web chat)
+  const [conversationSource, setConversationSource] = useState<'external' | 'visitor'>('external');
+  const [unreadExternalCount, setUnreadExternalCount] = useState(0);
+  const [unreadVisitorCount, setUnreadVisitorCount] = useState(0);
+
   // Utilities for contrast color
   const getTextColorForBg = (hex: string) => {
     const c = hex?.replace('#', '');
@@ -121,6 +126,21 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
       setReadOverrideMap({});
     }
   };
+
+  // Update badge counts mỗi khi danh sách conversations thay đổi
+  useEffect(() => {
+    try {
+      const list: any[] = conversations as any[];
+      const unread = list.filter((c) => (c?.unreadCount || 0) > 0).length;
+      if (conversationSource === 'external') {
+        setUnreadExternalCount(unread);
+      } else {
+        setUnreadVisitorCount(unread);
+      }
+    } catch {
+      // ignore
+    }
+  }, [conversations, conversationSource]);
 
   const saveReadOverride = async (conversationId: string, iso: string) => {
     setReadOverrideMap((prev) => {
@@ -587,9 +607,24 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
     );
   };
 
+  // Preload unread Visitor conversations once (để badge Visitor có số ngay từ đầu)
+  useEffect(() => {
+    const preloadVisitorUnread = async () => {
+      try {
+        const res = await chatApi.getVisitorConversations({ limit: 50 });
+        const list: any[] = res?.data || [];
+        const unread = list.filter((c) => (c?.unreadCount || 0) > 0).length;
+        setUnreadVisitorCount(unread);
+      } catch {
+        // ignore
+      }
+    };
+    preloadVisitorUnread();
+  }, []);
+
   useEffect(() => {
     loadConversations();
-  }, []);
+  }, [conversationSource]);
 
   useEffect(() => {
     if (selectedConversation) {
@@ -601,9 +636,12 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
     try {
       setIsLoading(true);
       setError(null);
-      // console.log('[ChatScreen] Loading conversations...');
-      
-      const response = await chatApi.getConversations({ limit: 50 });
+      // console.log('[ChatScreen] Loading conversations...', conversationSource);
+
+      const response =
+        conversationSource === 'visitor'
+          ? await chatApi.getVisitorConversations({ limit: 50 })
+          : await chatApi.getConversations({ limit: 50 });
       // console.log('[ChatScreen] Loaded conversations:', response.data.length);
       
       // Debug platform info
@@ -632,81 +670,36 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
           try { chatApi.markAsRead(c.id); } catch {}
         }
       } catch {}
-      // Fetch last message preview for first conversations (limited to reduce requests)
+      // Map label summary từ backend (topLabels + totalLabelCount) để hiển thị chip và +N
       try {
-        const convsForPreview = response.data.slice(0, 12);
-        const pairs = await Promise.all(
-          convsForPreview.map(async (c) => {
-            try {
-              const res = await chatApi.getMessages(c.id, { limit: 100 });
-              const list = res.data || [];
-              let last: any = null;
-              for (const m of list) {
-                const raw: any = (m as any)?.sentAt || (m as any)?.createdAt || (m as any)?.deliveredAt || (m as any)?.readAt;
-                const t = parseMessageDate(raw).getTime();
-                if (!last || t > last.t) last = { t, m };
-              }
-              let preview = '';
-              if (last?.m) {
-                const lm: any = last.m;
-                preview = String(lm.content || '').trim();
-                if (!preview) {
-                  const ct = String(lm.contentType || '').toLowerCase();
-                  if (ct === 'image') preview = '[Ảnh]';
-                  else if (ct === 'file') preview = '[Tệp]';
-                  else if (ct === 'voice') preview = '[Voice]';
-                  else if (ct === 'email') preview = '[Email]';
-                }
-              }
-              return { id: c.id, preview };
-            } catch {
-              return { id: c.id, preview: '' };
-            }
-          })
-        );
-        const map: Record<string, string> = {};
-        pairs.forEach(p => { if (p.preview) map[p.id] = p.preview; });
-        setConvLastMessageMap(map);
-      } catch {}
-      // Load top labels for conversations (best-effort)
-      try {
-        const convs = mergedConvs.slice(0, 20); // limit to 20 to avoid too many requests
-        const results = await Promise.all(
-          convs.map(async (c) => {
-            try {
-              const labels = await apiLabel.getTopConversationLabels(c.id, 2);
-              return { id: c.id, labels };
-            } catch (e) {
-              return { id: c.id, labels: [] as TopLabel[] };
-            }
-          })
-        );
-        const map: Record<string, TopLabel[]> = {};
-        results.forEach(r => { map[r.id] = r.labels; });
-        setTopLabelsMap(map);
-      } catch (e) {
-        // ignore
-      }
-      // Compute extras count (+N) using all labels for first 15 conversations
-      try {
-        const convs = mergedConvs.slice(0, 15);
-        const extraPairs = await Promise.all(
-          convs.map(async (c) => {
-            try {
-              const all = await apiLabel.getConversationMessageLabels(c.id);
-              const uniqueIds = Array.from(new Set(all.map((ml: any) => ml.labelId)));
-              const shown = Math.min(2, (topLabelsMap[c.id] || []).length);
-              const extras = Math.max(0, uniqueIds.length - shown);
-              return { id: c.id, extras };
-            } catch {
-              return { id: c.id, extras: 0 };
-            }
-          })
-        );
+        const labelsMap: Record<string, TopLabel[]> = {};
         const extrasMap: Record<string, number> = {};
-        extraPairs.forEach(p => { extrasMap[p.id] = p.extras; });
+
+        (mergedConvs as any[]).forEach((c) => {
+          const convTop: any[] = (c as any).topLabels || [];
+          const totalDistinct: number = (c as any).totalLabelCount ?? convTop.length;
+
+          // Chuẩn hoá về TopLabel[] cho FE
+          const top: TopLabel[] = convTop.map((l: any) => ({
+            labelId: l.labelId,
+            labelName: l.labelName,
+            count: l.count,
+            color: l.color,
+            category: l.category,
+          }));
+
+          labelsMap[c.id] = top;
+
+          const shown = Math.min(2, top.length);
+          const extras = Math.max(0, totalDistinct - shown);
+          extrasMap[c.id] = extras;
+        });
+
+        setTopLabelsMap(labelsMap);
         setConvExtraLabelsMap(extrasMap);
-      } catch {}
+      } catch (e) {
+        // Nếu có lỗi khi map label summary thì bỏ qua, không chặn luồng chính
+      }
       
       // Clear error nếu load thành công
       setError(null);
@@ -941,19 +934,18 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
       case 'email':
         return <MaterialIcons name="email" size={iconSize} color={iconColor} />;
       case 'zalo':
-        return (
-          <Image
-            source={require('../../assets/zalo-logo.png')}
-            style={{ width: iconSize, height: iconSize }}
-            resizeMode="contain"
-          />
-        );
+        // Use a generic chat icon for Zalo instead of an image asset
+        return <FontAwesome5 name="comment-dots" size={iconSize} color={iconColor} />;
       case 'whatsapp':
         return <FontAwesome name="whatsapp" size={iconSize} color={iconColor} />;
       case 'viber':
         return <FontAwesome5 name="viber" size={iconSize} color={iconColor} />;
       case 'messenger':
         return <Ionicons name="chatbubble" size={iconSize} color={iconColor} />;
+      case 'visitor':
+      case 'web':
+      case 'web-chat':
+        return <Ionicons name="globe-outline" size={iconSize} color={iconColor} />;
       default:
         return <MaterialIcons name="chat" size={iconSize} color={iconColor} />;
     }
@@ -978,6 +970,10 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
         return '#7360F2';
       case 'messenger':
         return '#00B2FF';
+      case 'visitor':
+      case 'web':
+      case 'web-chat':
+        return '#14B8A6';
       default:
         return '#6B7280';
     }
@@ -1028,13 +1024,18 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
                         item.title || 
                         'Khách hàng';
     
-    // Get platform from channel - check multiple possible fields
-    const platform = (item.channel as any)?.socialNetwork?.name || 
-                    (item.channel as any)?.socialNetwork?.platform ||
-                    (item.channel as any)?.social?.name ||
-                    (item.channel as any)?.social?.platform ||
-                    (item.channel as any)?.platform ||
-                    'unknown';
+    // Visitor view: toàn bộ danh sách là web chat
+    const isVisitorView = conversationSource === 'visitor';
+
+    // Get platform from channel - hoặc Visitor nếu đang ở tab Visitor
+    const platform = isVisitorView
+      ? 'visitor'
+      : (item.channel as any)?.socialNetwork?.name || 
+        (item.channel as any)?.socialNetwork?.platform ||
+        (item.channel as any)?.social?.name ||
+        (item.channel as any)?.social?.platform ||
+        (item.channel as any)?.platform ||
+        'unknown';
     
     // Get last message time - with proper validation
     let lastTime: Date | null = null;
@@ -1092,6 +1093,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
       if (ct === 'voice') return '[Voice]';
       if (ct === 'email') return '[Email]';
       if (lm?.attachments?.files?.length) return '[Tệp]';
+      if (isVisitorView) return 'Chat với khách truy cập website';
       return `Chat với ${
         (item.customer as any)?.phone ||
         (item.customer as any)?.email ||
@@ -1155,7 +1157,11 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
           {topLabels.length > 0 && (
             <View style={styles.convLabelRow}>
               {topLabels.slice(0, 2).map((l) => (
-                <LabelChip text={l.labelName} color={l.color || '#6B7280'} />
+                <LabelChip
+                  key={l.labelId}
+                  text={l.labelName}
+                  color={l.color || '#6B7280'}
+                />
               ))}
               {extraCount > 0 && (
                 <TouchableOpacity activeOpacity={0.7} onPress={() => openConversationLabels(item)}>
@@ -1265,6 +1271,63 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
               />
             </View>
           </LinearGradient>
+
+          {/* Source toggle: Kênh MXH vs Visitor */}
+          <View style={styles.sourceToggleRow}>
+            <TouchableOpacity
+              style={[
+                styles.sourceToggleButton,
+                conversationSource === 'external' && styles.sourceToggleButtonActive,
+              ]}
+              activeOpacity={0.85}
+              onPress={() => setConversationSource('external')}
+            >
+              <View style={styles.sourceToggleInner}>
+                <Text
+                  style={[
+                    styles.sourceToggleText,
+                    conversationSource === 'external' && styles.sourceToggleTextActive,
+                  ]}
+                >
+                  Kênh MXH
+                </Text>
+                {unreadExternalCount > 0 && (
+                  <View style={styles.sourceBadge}>
+                    <Text style={styles.sourceBadgeText}>
+                      {unreadExternalCount > 99 ? '99+' : unreadExternalCount}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.sourceToggleButton,
+                conversationSource === 'visitor' && styles.sourceToggleButtonActive,
+              ]}
+              activeOpacity={0.85}
+              onPress={() => setConversationSource('visitor')}
+            >
+              <View style={styles.sourceToggleInner}>
+                <Text
+                  style={[
+                    styles.sourceToggleText,
+                    conversationSource === 'visitor' && styles.sourceToggleTextActive,
+                  ]}
+                >
+                  Visitor
+                </Text>
+                {unreadVisitorCount > 0 && (
+                  <View style={styles.sourceBadge}>
+                    <Text style={styles.sourceBadgeText}>
+                      {unreadVisitorCount > 99 ? '99+' : unreadVisitorCount}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            </TouchableOpacity>
+          </View>
         </LinearGradient>
 
         {/* Conversations List */}
@@ -1462,15 +1525,19 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
                 styles.headerPlatformBadge,
                 { 
                   backgroundColor: getPlatformColor(
-                    (selectedConversation.channel as any)?.socialNetwork?.name || 
-                    (selectedConversation.channel as any)?.social?.platform
-                  ) 
+                    conversationSource === 'visitor'
+                      ? 'visitor'
+                      : (selectedConversation.channel as any)?.socialNetwork?.name || 
+                        (selectedConversation.channel as any)?.social?.platform
+                  ),
                 },
               ]}
             >
               {renderPlatformIcon(
-                (selectedConversation.channel as any)?.socialNetwork?.name || 
-                (selectedConversation.channel as any)?.social?.platform
+                conversationSource === 'visitor'
+                  ? 'visitor'
+                  : (selectedConversation.channel as any)?.socialNetwork?.name || 
+                    (selectedConversation.channel as any)?.social?.platform
               )}
             </View>
           </TouchableOpacity>
@@ -1488,9 +1555,11 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
                'Khách hàng'}
             </Text>
             <Text style={styles.chatHeaderStatus} numberOfLines={1}>
-              {(selectedConversation.channel as any)?.socialNetwork?.name || 
-               (selectedConversation.channel as any)?.social?.platform || 
-               'Chat'}
+              {conversationSource === 'visitor'
+                ? 'Visitor (Web chat)'
+                : (selectedConversation.channel as any)?.socialNetwork?.name || 
+                  (selectedConversation.channel as any)?.social?.platform || 
+                  'Chat'}
             </Text>
           </TouchableOpacity>
         </View>
@@ -1580,6 +1649,46 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
             }
           } catch (error) {
             console.error('Error sending message:', error);
+            const errorMsg = 'Lỗi kết nối. Vui lòng thử lại sau.';
+            setError(errorMsg);
+            Alert.alert('Lỗi', errorMsg);
+          } finally {
+            setIsSending(false);
+          }
+        }}
+        showContactSuggestionButton={conversationSource === 'visitor'}
+        onContactSuggestion={async () => {
+          if (!selectedConversation || isSending) return;
+
+          const template =
+            'Anh/chị vui lòng giúp em cung cấp thông tin liên hệ theo mẫu sau (có thể trả lời từng dòng):\n' +
+            '- Họ và tên: \n' +
+            '- Số điện thoại: \n' +
+            '- Email: \n' +
+            '- Địa chỉ: ';
+
+          try {
+            setIsSending(true);
+            setError(null);
+
+            const result = await chatApi.sendMessage({
+              conversationId: selectedConversation.id,
+              content: template,
+              contentType: 'text',
+              replyToMessageId: undefined,
+              sendToSocialNetwork: true,
+            });
+
+            if (result.success && result.message) {
+              setMessages((prev) => [...prev, result.message!]);
+              showToast('Đã gửi gợi ý điền thông tin liên hệ');
+            } else {
+              const errorMsg = result.userMessage || result.error || 'Không thể gửi lời nhắc';
+              setError(errorMsg);
+              Alert.alert('Lỗi', errorMsg);
+            }
+          } catch (error) {
+            console.error('Error sending contact suggestion:', error);
             const errorMsg = 'Lỗi kết nối. Vui lòng thử lại sau.';
             setError(errorMsg);
             Alert.alert('Lỗi', errorMsg);
@@ -1969,23 +2078,75 @@ const styles = StyleSheet.create({
     marginLeft: 4,
   },
   searchGradient: {
-    borderRadius: 16,
-    padding: 2,
-    marginTop: 4,
+    borderRadius: 14,
+    padding: 1.5,
+    marginTop: 6,
   },
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    borderRadius: 16,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.35)',
   },
   searchInput: {
     flex: 1,
-    marginLeft: 8,
-    fontSize: 16,
+    marginLeft: 6,
+    fontSize: 14,
     color: '#111827',
+  },
+  sourceToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 8,
+    gap: 8,
+  },
+  sourceToggleButton: {
+    flex: 1,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.7)',
+    backgroundColor: 'rgba(248,250,252,0.8)',
+    paddingVertical: 8,
+  },
+  sourceToggleButtonActive: {
+    backgroundColor: '#DBEAFE',
+    borderColor: '#3B82F6',
+  },
+  sourceToggleText: {
+    textAlign: 'center',
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#64748B',
+  },
+  sourceToggleTextActive: {
+    color: '#1D4ED8',
+    fontWeight: '700',
+  },
+  sourceBadge: {
+    marginTop: 0,
+    marginLeft: 6,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: '#EF4444',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 4,
+  },
+  sourceBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  sourceToggleInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   loadingContainer: {
     flex: 1,

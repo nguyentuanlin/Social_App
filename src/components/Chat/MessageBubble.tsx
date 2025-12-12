@@ -173,7 +173,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
         }
       } else {
         // Load and play new sound
-        console.log('Loading audio from:', audioUrl);
+        // console.log('Loading audio from:', audioUrl);
         const { sound: newSound } = await Audio.Sound.createAsync(
           { uri: audioUrl },
           { shouldPlay: true },

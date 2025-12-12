@@ -110,13 +110,8 @@ const ConversationItem: React.FC<ConversationItemProps> = ({
       case 'email':
         return <MaterialIcons name="email" size={iconSize} color={iconColor} />;
       case 'zalo':
-        return (
-          <Image
-            source={require('../../../assets/zalo-logo.png')}
-            style={{ width: iconSize, height: iconSize }}
-            resizeMode="contain"
-          />
-        );
+        // Use a generic chat icon for Zalo instead of an image asset
+        return <FontAwesome5 name="comment-dots" size={iconSize} color={iconColor} />;
       case 'whatsapp':
         return <FontAwesome name="whatsapp" size={iconSize} color={iconColor} />;
       case 'viber':

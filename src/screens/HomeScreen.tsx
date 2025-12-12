@@ -4,7 +4,7 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  ScrollView,
+  ScrollView, 
   Image,
   ActivityIndicator,
   RefreshControl,
@@ -16,8 +16,9 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
 import ProfileModal from '../components/ProfileModal';
 import ChatScreen from './ChatScreen';
-import { dashboardApi, DashboardStats } from '../services/apiDashboard';
+import { dashboardApi, DashboardStats, CSITrendData } from '../services/apiDashboard';
 import * as ImagePicker from 'expo-image-picker';
+import CSIChart from '../components/Chat/CSIChart';
 
 const HomeScreen = () => {
   const { user, logout, updateUserLocal } = useAuth();
@@ -27,6 +28,8 @@ const HomeScreen = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [uploading, setUploading] = useState<'avatar' | 'cover' | null>(null);
+  const [csiTrend, setCsiTrend] = useState<CSITrendData | null>(null);
+  const [selectedCSIChannelId, setSelectedCSIChannelId] = useState<string | 'all'>('all');
 
   useEffect(() => {
     loadStats();
@@ -35,8 +38,17 @@ const HomeScreen = () => {
   const loadStats = async () => {
     try {
       setIsLoading(true);
-      const data = await dashboardApi.getEmployeeStats();
-      setStats(data);
+      const [statsData, csiData] = await Promise.all([
+        dashboardApi.getEmployeeStats(),
+        dashboardApi.getCSITrend(),
+      ]);
+      setStats(statsData);
+      setCsiTrend(csiData);
+      if (csiData && Array.isArray(csiData.channels) && csiData.channels.length > 0) {
+        setSelectedCSIChannelId(csiData.channels[0].id || 'all');
+      } else {
+        setSelectedCSIChannelId('all');
+      }
     } catch (error) {
       console.error('Error loading stats:', error);
     } finally {
@@ -80,6 +92,52 @@ const HomeScreen = () => {
     } finally {
       setUploading(null);
     }
+  };
+
+  const getCurrentAvgCSI = () => {
+    if (!csiTrend) return 0;
+    if (!selectedCSIChannelId || selectedCSIChannelId === 'all') {
+      return csiTrend.summary?.avgCSI ?? 0;
+    }
+    const summary = csiTrend.summaryByChannel?.find((s) => s.channelId === selectedCSIChannelId);
+    if (summary && typeof summary.avgCSI === 'number') {
+      return summary.avgCSI;
+    }
+    return csiTrend.summary?.avgCSI ?? 0;
+  };
+
+  const getCurrentCSIPoints = () => {
+    if (
+      !csiTrend ||
+      !csiTrend.seriesByChannel ||
+      !Array.isArray(csiTrend.seriesByChannel) ||
+      csiTrend.seriesByChannel.length === 0
+    ) {
+      return [] as { date: string; avgCSI: number }[];
+    }
+
+    const labels = csiTrend.seriesByChannel.map((row: any) => String(row.date));
+    const channels = csiTrend.channels || [];
+
+    const targetChannels = !selectedCSIChannelId || selectedCSIChannelId === 'all'
+      ? channels
+      : channels.filter((ch) => ch.id === selectedCSIChannelId);
+
+    const palette = ['#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6','#14b8a6','#e11d48','#84cc16','#06b6d4','#f97316'];
+
+    const series = targetChannels.map((ch, idx) => {
+      const values = csiTrend.seriesByChannel.map((row: any) => {
+        const v = row[ch.id];
+        return typeof v === 'number' ? v : 0;
+      });
+      return {
+        label: `${ch.name} (${ch.platform})`,
+        color: palette[idx % palette.length],
+        values,
+      };
+    });
+
+    return { labels, series };
   };
 
   // Show ChatScreen if active
@@ -233,6 +291,119 @@ const HomeScreen = () => {
                 </LinearGradient>
               </View>
             </View>
+
+            {csiTrend && csiTrend.csiTrend && csiTrend.csiTrend.length > 0 && (
+              <View style={styles.csiSection}>
+                <View style={styles.csiHeaderRow}>
+                  <View style={styles.csiTitleBlock}>
+                    <Text style={styles.csiTitle}>Chỉ số hài lòng khách hàng (CSI)</Text>
+                    <Text style={styles.csiSubtitle}>Xu hướng 7 ngày gần đây</Text>
+                  </View>
+                  <View style={styles.csiBadge}>
+                    <Text style={styles.csiBadgeLabel}>CSI trung bình</Text>
+                    <Text style={styles.csiBadgeValue}>
+                      {getCurrentAvgCSI().toFixed(2)}
+                    </Text>
+                  </View>
+                </View>
+
+                {csiTrend.channels && csiTrend.channels.length > 0 && (
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    style={styles.csiChannelScroll}
+                    contentContainerStyle={styles.csiChannelScrollContent}
+                  >
+                    <TouchableOpacity
+                      style={[
+                        styles.csiChannelChip,
+                        selectedCSIChannelId === 'all' && styles.csiChannelChipActive,
+                      ]}
+                      onPress={() => setSelectedCSIChannelId('all')}
+                    >
+                      <Text
+                        style={[
+                          styles.csiChannelChipText,
+                          selectedCSIChannelId === 'all' && styles.csiChannelChipTextActive,
+                        ]}
+                      >
+                        Tất cả
+                      </Text>
+                    </TouchableOpacity>
+                    {csiTrend.channels.map((ch) => (
+                      <TouchableOpacity
+                        key={ch.id}
+                        style={[
+                          styles.csiChannelChip,
+                          selectedCSIChannelId === ch.id && styles.csiChannelChipActive,
+                        ]}
+                        onPress={() => setSelectedCSIChannelId(ch.id)}
+                      >
+                        <Text
+                          style={[
+                            styles.csiChannelChipText,
+                            selectedCSIChannelId === ch.id && styles.csiChannelChipTextActive,
+                          ]}
+                        >
+                          {ch.name}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                )}
+
+                {(() => {
+                  const multi = getCurrentCSIPoints() as any;
+                  return (
+                    <>
+                      <CSIChart
+                        title="Biểu đồ CSI theo thời gian"
+                        multiSeries={multi}
+                      />
+
+                      {multi && multi.series && multi.series.length > 0 && (
+                        <View style={styles.csiChannelLegendRow}>
+                          {multi.series.map((s: any, idx: number) => (
+                            <View key={idx} style={styles.csiChannelLegendItem}>
+                              <View
+                                style={[
+                                  styles.csiChannelLegendDot,
+                                  { backgroundColor: s.color || '#3B82F6' },
+                                ]}
+                              />
+                              <Text style={styles.csiChannelLegendText} numberOfLines={1}>
+                                {s.label}
+                              </Text>
+                            </View>
+                          ))}
+                        </View>
+                      )}
+                    </>
+                  );
+                })()}
+
+                <View style={styles.csiLegendRow}>
+                  <View style={styles.csiLegendItem}>
+                    <View style={[styles.csiLegendDot, { backgroundColor: '#10B981' }]} />
+                    <Text style={styles.csiLegendText}>
+                      Hài lòng: {csiTrend.summary.totalHappy}
+                    </Text>
+                  </View>
+                  <View style={styles.csiLegendItem}>
+                    <View style={[styles.csiLegendDot, { backgroundColor: '#F59E0B' }]} />
+                    <Text style={styles.csiLegendText}>
+                      Trung tính: {csiTrend.summary.totalNeutral}
+                    </Text>
+                  </View>
+                  <View style={styles.csiLegendItem}>
+                    <View style={[styles.csiLegendDot, { backgroundColor: '#EF4444' }]} />
+                    <Text style={styles.csiLegendText}>
+                      Không hài lòng: {csiTrend.summary.totalSad}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            )}
           </>
         )}
 
@@ -465,36 +636,163 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.10)',
   },
   section: {
-    marginTop: 24,
+    marginTop: 32,
+    marginBottom: 24,
   },
   sectionTitle: {
     fontSize: 18,
     fontWeight: 'bold',
     color: '#1F2937',
-    marginBottom: 12,
+    marginBottom: 16,
+  },
+  csiSection: {
+    marginTop: 8,
+    marginBottom: 8,
+    borderRadius: 18,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(59,130,246,0.06)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  csiHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  csiTitleBlock: {
+    flexShrink: 1,
+    paddingRight: 8,
+  },
+  csiTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  csiSubtitle: {
+    marginTop: 2,
+    fontSize: 12,
+    color: '#6B7280',
+  },
+  csiBadge: {
+    minWidth: 80,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
+    backgroundColor: 'rgba(59,130,246,0.06)',
+    alignItems: 'flex-end',
+  },
+  csiBadgeLabel: {
+    fontSize: 9,
+    color: '#6B7280',
+  },
+  csiBadgeValue: {
+    marginTop: 2,
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1D4ED8',
+  },
+  csiLegendRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 4,
+    gap: 8,
+  },
+  csiLegendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  csiLegendDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  csiLegendText: {
+    fontSize: 11,
+    color: '#6B7280',
+  },
+  csiChannelLegendRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginTop: 4,
+    marginBottom: 2,
+    gap: 8,
+  },
+  csiChannelLegendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    maxWidth: '48%',
+  },
+  csiChannelLegendDot: {
+    width: 12,
+    height: 4,
+    borderRadius: 2,
+    marginRight: 4,
+  },
+  csiChannelLegendText: {
+    fontSize: 11,
+    color: '#4B5563',
+  },
+  csiChannelScroll: {
+    marginTop: 4,
+    marginBottom: 4,
+  },
+  csiChannelScrollContent: {
+    paddingVertical: 4,
+    paddingRight: 4,
+  },
+  csiChannelChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.9)',
+    marginRight: 8,
+    backgroundColor: '#FFFFFF',
+  },
+  csiChannelChipActive: {
+    backgroundColor: 'rgba(59,130,246,0.08)',
+    borderColor: '#3B82F6',
+  },
+  csiChannelChipText: {
+    fontSize: 12,
+    color: '#4B5563',
+  },
+  csiChannelChipTextActive: {
+    color: '#1D4ED8',
+    fontWeight: '600',
   },
   actionCard: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    padding: 18,
-    marginBottom: 12,
+    borderRadius: 20,
+    paddingVertical: 18,
+    paddingHorizontal: 20,
+    marginTop: 4,
+    marginBottom: 20,
     borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.06)',
+    borderColor: 'rgba(15,23,42,0.05)',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
+    shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
+    shadowRadius: 12,
+    elevation: 4,
   },
   actionIconContainer: {
     width: 56,
     height: 56,
-    borderRadius: 14,
-    backgroundColor: '#EEF2FF',
+    borderRadius: 16,
+    backgroundColor: 'rgba(59,130,246,0.08)',
     borderWidth: 1,
-    borderColor: 'rgba(59,130,246,0.15)',
+    borderColor: 'rgba(59,130,246,0.2)',
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 16,
