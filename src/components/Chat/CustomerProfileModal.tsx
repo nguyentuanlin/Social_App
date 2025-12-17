@@ -215,12 +215,15 @@ const CustomerProfileModal: React.FC<CustomerProfileModalProps> = ({
 
         <ScrollView 
           style={styles.content}
-          contentContainerStyle={[styles.scrollContent, { paddingBottom: 96 + insets.bottom, minHeight: screenH + insets.bottom }]}
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: 96 + insets.bottom }]}
           keyboardShouldPersistTaps="handled"
-          scrollIndicatorInsets={{ bottom: 36 + insets.bottom }}
-          contentInset={{ bottom: 96 + insets.bottom }}
-          nestedScrollEnabled
-          contentInsetAdjustmentBehavior="always"
+          showsVerticalScrollIndicator={true}
+          scrollEnabled={true}
+          bounces={true}
+          alwaysBounceVertical={false}
+          nestedScrollEnabled={true}
+          removeClippedSubviews={false}
+          scrollEventThrottle={16}
         >
           {/* Customer Info */}
           <View style={styles.customerInfo}>
@@ -650,7 +653,8 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    paddingBottom: 220,
+    paddingBottom: 100,
+    minHeight: '100%',
   },
   customerInfo: {
     backgroundColor: '#FFFFFF',

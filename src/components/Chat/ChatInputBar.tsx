@@ -54,6 +54,11 @@ const ChatInputBar: React.FC<ChatInputBarProps> = ({
   const webChunksRef = React.useRef<BlobPart[]>([]);
 
   const actionsAnim = React.useRef(new Animated.Value(1)).current;
+  const hasText = messageText.trim().length > 0;
+  // Nếu không có text và không có file/recording, luôn ưu tiên hiện đầy đủ actions
+  const computedActionsVisible =
+    showActions ||
+    (!hasText && !selectedFile && !isRecording && !isUploading && !isSending);
 
   useEffect(() => {
     if (Platform.OS === 'android' && (UIManager as any).setLayoutAnimationEnabledExperimental) {
@@ -69,6 +74,11 @@ const ChatInputBar: React.FC<ChatInputBarProps> = ({
       // Send text message
       onSendMessage(messageText.trim());
       setMessageText('');
+      // Always reopen the action buttons after sending
+      if (!showActions) {
+        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+        setShowActions(true);
+      }
     }
   };
 
@@ -156,6 +166,11 @@ const ChatInputBar: React.FC<ChatInputBarProps> = ({
         onFileUploaded?.(uploadResult);
         // Clear selected file
         setSelectedFile(null);
+        // Ensure actions are visible again after upload
+        if (!showActions) {
+          LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+          setShowActions(true);
+        }
       } else {
         Alert.alert('Lỗi tải lên', uploadResult.error || 'Không thể tải file lên');
       }
@@ -169,6 +184,10 @@ const ChatInputBar: React.FC<ChatInputBarProps> = ({
 
   const handleRemoveSelectedFile = () => {
     setSelectedFile(null);
+    // Trả lại dãy nút hành động nếu không còn file đính kèm
+    if (messageText.trim().length === 0) {
+      setShowActions(true);
+    }
   };
 
   const handleEmojiPicker = () => {
@@ -178,7 +197,7 @@ const ChatInputBar: React.FC<ChatInputBarProps> = ({
   const handleToggleActions = () => {
     if (isSending || isUploading) return;
     // Khi ô nhập trống, luôn hiển thị đầy đủ action => không toggle
-    if (messageText.trim().length === 0) return;
+    if (!hasText) return;
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setShowActions((prev) => !prev);
   };
@@ -192,20 +211,29 @@ const ChatInputBar: React.FC<ChatInputBarProps> = ({
 
   // Tự động hiển thị đầy đủ khi ô nhập trống, và thu vào khi người dùng bắt đầu gõ
   useEffect(() => {
-    const empty = messageText.trim().length === 0;
+    const empty = !hasText;
     if (empty !== showActions) {
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       setShowActions(empty);
     }
   }, [messageText]);
 
+  // Khi bỏ file đính kèm, nếu không có text thì bật lại dãy nút hành động
+  useEffect(() => {
+    if (!selectedFile && !hasText && !showActions) {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setShowActions(true);
+    }
+  }, [selectedFile, messageText, showActions]);
+
+  // Animate whenever the effective visibility changes
   useEffect(() => {
     Animated.timing(actionsAnim, {
-      toValue: showActions ? 1 : 0,
+      toValue: computedActionsVisible ? 1 : 0,
       duration: 200,
       useNativeDriver: true,
     }).start();
-  }, [showActions]);
+  }, [computedActionsVisible]);
 
   const formatSec = (s: number) => {
     const m = Math.floor(s / 60);
@@ -377,7 +405,7 @@ const ChatInputBar: React.FC<ChatInputBarProps> = ({
       
       <View style={styles.inputRow}>
         {/* Left: inline actions OR plus button */}
-        {showActions ? (
+        {computedActionsVisible ? (
           <Animated.View
             style={[
               styles.actionsRow,

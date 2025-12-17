@@ -27,6 +27,15 @@
         "EXPO_NEW_ARCH_ENABLED": "0"
       }
     },
+    "release-apk": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_NEW_ARCH_ENABLED": "0"
+      }
+    },
     "production": {
       "env": {
         "EXPO_NEW_ARCH_ENABLED": "0"

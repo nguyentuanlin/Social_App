@@ -2,11 +2,11 @@ import axios, { AxiosInstance, AxiosError } from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 
-// URL Backend - Thay đổi theo IP máy của bạn
-const API_BASE_URL =
-  Platform.OS === 'android'
-    ? 'http://10.0.2.2:7000'
-    : 'http://localhost:7000'; // Backend chạy cổng 3000c
+// URL Backend - cấu hình qua biến môi trường (có fallback giá trị mặc định)
+const ANDROID_API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL_ANDROID || 'http://10.0.2.2:7000';
+const IOS_API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL_IOS || 'http://localhost:7000';
+
+const API_BASE_URL = Platform.OS === 'android' ? ANDROID_API_BASE_URL : IOS_API_BASE_URL;
 
 // Tạo axios instance
 const apiClient: AxiosInstance = axios.create({

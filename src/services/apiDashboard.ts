@@ -49,8 +49,8 @@ export const dashboardApi = {
       const response = await apiClient.get('/employee-dashboard/overview');
       
       // Debug logging
-      console.log('[Dashboard API] Employee dashboard response:', response.data);
-      console.log('[Dashboard API] Assigned channels:', response.data.assignedChannels);
+      // console.log('[Dashboard API] Employee dashboard response:', response.data);
+      // console.log('[Dashboard API] Assigned channels:', response.data.assignedChannels);
       
       return {
         totalConversations: response.data.totalConversations || 0,
@@ -92,7 +92,7 @@ export const dashboardApi = {
       const response = await apiClient.get('/dashboard/csi-trend', {
         params: { days },
       });
-      console.log('[Dashboard API] CSI trend response:', response.data);
+      // console.log('[Dashboard API] CSI trend response:', response.data);
 
       const raw = response.data as any;
       const fixed: CSITrendData = {

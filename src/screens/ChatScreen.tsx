@@ -38,10 +38,13 @@ interface ChatScreenProps {
   onBack?: () => void;
 }
 
+const MESSAGES_PAGE_SIZE = 30;
+
 const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [visibleMessageCount, setVisibleMessageCount] = useState<number>(MESSAGES_PAGE_SIZE);
   const [messageText, setMessageText] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
@@ -54,6 +57,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
   const [messageLabelsMap, setMessageLabelsMap] = useState<Record<string, MsgLabel[]>>({});
   const [convExtraLabelsMap, setConvExtraLabelsMap] = useState<Record<string, number>>({});
   const [convLastMessageMap, setConvLastMessageMap] = useState<Record<string, string>>({});
+  const conversationsRef = useRef<Conversation[]>([]);
   const [labelsModalVisible, setLabelsModalVisible] = useState(false);
   const [labelsModalItems, setLabelsModalItems] = useState<TopLabel[]>([]);
   const [labelsModalTitle, setLabelsModalTitle] = useState<string>('');
@@ -101,6 +105,19 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
   const [conversationSource, setConversationSource] = useState<'external' | 'visitor'>('external');
   const [unreadExternalCount, setUnreadExternalCount] = useState(0);
   const [unreadVisitorCount, setUnreadVisitorCount] = useState(0);
+  const badgeRefreshTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // WebSocket base URL - ưu tiên cấu hình qua biến môi trường giống web
+  // Có thể người dùng set EXPO_PUBLIC_WEBSOCKET_URL = https://smile.cmcu.edu.vn/api/backend
+  // nên cần strip phần /api/backend để khớp với nginx location /chat/socket.io
+  const RAW_WS_BASE =
+    (process.env.EXPO_PUBLIC_WEBSOCKET_URL as string | undefined) ||
+    (process.env.NEXT_PUBLIC_WEBSOCKET_URL as string | undefined) ||
+    API_BASE_URL;
+  const WS_BASE_URL = (RAW_WS_BASE || '')
+    // bỏ /api/backend hoặc /api ở cuối nếu có
+    .replace(/\/api\/backend\/?$/i, '')
+    .replace(/\/api\/?$/i, '');
 
   // Utilities for contrast color
   const getTextColorForBg = (hex: string) => {
@@ -129,6 +146,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
 
   // Update badge counts mỗi khi danh sách conversations thay đổi
   useEffect(() => {
+    conversationsRef.current = conversations;
     try {
       const list: any[] = conversations as any[];
       const unread = list.filter((c) => (c?.unreadCount || 0) > 0).length;
@@ -271,6 +289,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
 
   // Keep ref of current conversation id for ws handlers
   useEffect(() => {
+    // console.log('[ChatScreen] WS_BASE_URL =', WS_BASE_URL);
     selectedConvIdRef.current = selectedConversation?.id || null;
   }, [selectedConversation?.id]);
 
@@ -280,22 +299,51 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
     (async () => {
       try {
         const token = await AsyncStorage.getItem('access_token');
-        const socket = io(`${API_BASE_URL}/chat`, {
-          transports: ['websocket'],
+        // Chuẩn hoá URL, bỏ dấu '/' thừa ở cuối
+        const wsBase = (WS_BASE_URL || '').replace(/\/+$/, '');
+        console.log('[ChatScreen] Initializing WebSocket with base =', wsBase);
+        const socket = io(`${wsBase}/chat`, {
+          transports: ['websocket', 'polling'],
           autoConnect: true,
           auth: { token },
+          reconnection: true,
+          reconnectionAttempts: 5,
+          reconnectionDelay: 1000,
+          reconnectionDelayMax: 10000,
         });
         if (!active) return;
         socketRef.current = socket;
 
         socket.on('connect', () => {
+          console.log('[ChatScreen][WS] connected, id =', socket.id);
           const currentId = selectedConvIdRef.current;
           if (currentId) {
             socket.emit('joinConversation', { conversationId: currentId });
+            console.log('[ChatScreen][WS] joinConversation on connect', currentId);
+          } else {
+            // In list view, join all conversations to receive realtime updates
+            (conversationsRef.current || []).forEach((c) => {
+              try {
+                socket.emit('joinConversation', { conversationId: c.id });
+              } catch (e) {
+                console.log('[ChatScreen][WS] joinConversation error', e);
+              }
+            });
           }
+        });
+        socket.on('connect_error', (err) => {
+          console.log('[ChatScreen][WS] connect_error', err?.message || err);
+        });
+        socket.on('reconnect', (attempt) => {
+          console.log('[ChatScreen][WS] reconnected', attempt);
         });
 
         socket.on('newMessage', (msg: any) => {
+          console.log('[ChatScreen][WS] newMessage arrived', {
+            id: msg?.id,
+            conversationId: msg?.conversationId,
+            senderType: msg?.senderType,
+          });
           const currentId = selectedConvIdRef.current;
 
           // Helper: derive preview label from message
@@ -341,6 +389,11 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
             setConvLastMessageMap((m) => ({ ...m, [msg.conversationId]: previewFromMsg }));
           }
 
+          // Refresh badges for tabs when có tin nhắn mới
+          if (String(msg?.senderType).toLowerCase() === 'customer') {
+            scheduleBadgeRefresh();
+          }
+
           // If currently viewing this conversation, also append the message in the chat view and keep unread = 0
           if (currentId && msg?.conversationId === currentId) {
             setMessages((prev) => {
@@ -364,14 +417,44 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
 
         // Optional: message update (reactions/status)
         socket.on('messageUpdate', (update: any) => {
+          console.log('[ChatScreen][WS] messageUpdate', update?.messageId);
           const currentId = selectedConvIdRef.current;
           if (!currentId || update?.conversationId !== currentId) return;
           if (!update?.messageId) return;
           setMessages(prev => prev.map(m => (m.id === update.messageId ? { ...m, ...update } as any : m)));
+          refreshMessageLabels(update.messageId);
+          if (update?.topLabels) {
+            updateConversationLabelSummary(
+              update.conversationId || currentId,
+              (update.topLabels || []) as TopLabel[],
+              update.totalLabelCount
+            );
+          }
+        });
+
+        socket.on('messageLabelUpdated', (payload: any) => {
+          const mid = payload?.messageId;
+          const cid = payload?.conversationId || selectedConvIdRef.current;
+          if (mid) refreshMessageLabels(mid);
+          if (payload?.labels?.length) {
+            updateMessageLabelsState(mid, payload.labels as MsgLabel[]);
+          }
+          if (payload?.topLabels) {
+            updateConversationLabelSummary(
+              cid,
+              (payload.topLabels || []) as TopLabel[],
+              payload.totalLabelCount
+            );
+          } else if (cid) {
+            apiLabel.getTopConversationLabels(cid).then((top) => {
+              updateConversationLabelSummary(cid, top as TopLabel[], payload?.totalLabelCount);
+            }).catch(() => {});
+          }
         });
 
         // Conversation-level updates: unreadCount, lastActivityAt, status, etc.
         socket.on('conversationUpdated', (payload: any) => {
+          console.log('[ChatScreen][WS] conversationUpdated', payload?.id);
           if (!payload?.id) return;
           setConversations((prev) => {
             const idx = prev.findIndex((c) => c.id === payload.id);
@@ -394,13 +477,33 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
               return next;
             }
           });
+          if (payload?.topLabels) {
+            updateConversationLabelSummary(
+              payload.id,
+              (payload.topLabels || []) as TopLabel[],
+              payload.totalLabelCount
+            );
+          }
+          if ((payload?.unreadCount || 0) > 0) {
+            scheduleBadgeRefresh();
+          }
         });
 
-        socket.on('disconnect', () => {
-          // no-op
+        socket.on('newConversation', (conv: any) => {
+          console.log('[ChatScreen][WS] newConversation', conv?.id);
+          if (!conv?.id) return;
+          setConversations((prev) => {
+            const exists = prev.some((c) => c.id === conv.id);
+            if (exists) return prev;
+            return [conv as any, ...prev];
+          });
+        });
+
+        socket.on('disconnect', (reason: any) => {
+          console.log('[ChatScreen][WS] disconnected', reason);
         });
       } catch (err) {
-        // console.log('[WS] Failed to init socket:', err);
+        console.log('[ChatScreen][WS] Failed to init socket:', err);
       }
     })();
 
@@ -442,6 +545,56 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
     }
   }, [convIdSignature, selectedConversation]);
 
+  const updateMessageLabelsState = (messageId: string, labels: MsgLabel[]) => {
+    setMessageLabelsMap((prev) => ({ ...(prev || {}), [messageId]: labels }));
+  };
+
+  const refreshMessageLabels = async (messageId: string) => {
+    try {
+      const labels = await apiLabel.getMessageLabels(messageId);
+      updateMessageLabelsState(messageId, labels);
+    } catch {
+      // ignore fetch errors
+    }
+  };
+
+  const refreshConversationLabels = async (conversationId: string) => {
+    if (!conversationId) return;
+    try {
+      const allLabels = await apiLabel.getConversationMessageLabels(conversationId);
+      const grouped: Record<string, MsgLabel[]> = {};
+      allLabels.forEach((ml: any) => {
+        const mid = ml.messageId;
+        if (!grouped[mid]) grouped[mid] = [];
+        grouped[mid].push(ml);
+      });
+      setMessageLabelsMap(grouped);
+    } catch {
+      // ignore
+    }
+
+    try {
+      const top = await apiLabel.getTopConversationLabels(conversationId);
+      updateConversationLabelSummary(conversationId, top as TopLabel[], undefined);
+    } catch {
+      // ignore
+    }
+  };
+
+  const updateConversationLabelSummary = (
+    conversationId: string,
+    topLabels?: TopLabel[],
+    totalDistinct?: number
+  ) => {
+    if (!conversationId || !topLabels) return;
+    setTopLabelsMap((prev) => ({ ...(prev || {}), [conversationId]: topLabels }));
+    setConvExtraLabelsMap((prev) => {
+      const shown = Math.min(2, topLabels.length);
+      const extras = Math.max(0, (totalDistinct ?? topLabels.length) - shown);
+      return { ...(prev || {}), [conversationId]: extras };
+    });
+  };
+
   const openMessageLabelPicker = async (messageId: string) => {
     setMsgLabelsVisible(true);
     setMsgLabelsMessageId(messageId);
@@ -468,15 +621,19 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
     try {
       if (assigned) {
         await apiLabel.removeLabelFromMessage(messageId, label.id);
-        const next = { ...(messageLabelsMap || {}) };
-        next[messageId] = (next[messageId] || []).filter((ml) => ml.labelId !== label.id);
-        setMessageLabelsMap(next);
+        setMessageLabelsMap((prev) => {
+          const next = { ...(prev || {}) };
+          next[messageId] = (next[messageId] || []).filter((ml) => ml.labelId !== label.id);
+          return next;
+        });
       } else {
         const created = await apiLabel.assignLabelToMessage({ messageId, labelId: label.id });
         const enriched = { ...created, label } as MsgLabel; // attach full label so UI shows name instead of ID
-        const next = { ...(messageLabelsMap || {}) };
-        next[messageId] = [...(next[messageId] || []), enriched];
-        setMessageLabelsMap(next);
+        setMessageLabelsMap((prev) => {
+          const next = { ...(prev || {}) };
+          next[messageId] = [...(next[messageId] || []), enriched];
+          return next;
+        });
       }
     } catch (e) {
       // console.log('Label toggle failed', e);
@@ -622,6 +779,21 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
     preloadVisitorUnread();
   }, []);
 
+  // Preload external unread once for badge (matching visitor preload)
+  useEffect(() => {
+    const preloadExternalUnread = async () => {
+      try {
+        const res = await chatApi.getConversations({ limit: 50 });
+        const list: any[] = res?.data || [];
+        const unread = list.filter((c) => (c?.unreadCount || 0) > 0).length;
+        setUnreadExternalCount(unread);
+      } catch {
+        // ignore
+      }
+    };
+    preloadExternalUnread();
+  }, []);
+
   useEffect(() => {
     loadConversations();
   }, [conversationSource]);
@@ -631,6 +803,18 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
       loadMessages(selectedConversation.id);
     }
   }, [selectedConversation]);
+
+  // Periodic refresh labels for current conversation to stay fresh even if WS event missing
+  useEffect(() => {
+    if (!selectedConversation?.id) return;
+    const cid = selectedConversation.id;
+    // initial refresh
+    refreshConversationLabels(cid);
+    const interval = setInterval(() => {
+      refreshConversationLabels(cid);
+    }, 15000); // every 15s
+    return () => clearInterval(interval);
+  }, [selectedConversation?.id]);
 
   const loadConversations = async () => {
     try {
@@ -709,6 +893,31 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  // Debounced badge refresh for both tabs
+  const refreshBadgeCounts = async () => {
+    try {
+      const [extRes, visRes] = await Promise.all([
+        chatApi.getConversations({ limit: 50 }),
+        chatApi.getVisitorConversations({ limit: 50 }),
+      ]);
+      const extUnread = (extRes?.data || []).filter((c: any) => (c?.unreadCount || 0) > 0).length;
+      const visUnread = (visRes?.data || []).filter((c: any) => (c?.unreadCount || 0) > 0).length;
+      setUnreadExternalCount(extUnread);
+      setUnreadVisitorCount(visUnread);
+    } catch {
+      // ignore badge refresh errors
+    }
+  };
+
+  const scheduleBadgeRefresh = () => {
+    if (badgeRefreshTimerRef.current) {
+      clearTimeout(badgeRefreshTimerRef.current);
+    }
+    badgeRefreshTimerRef.current = setTimeout(() => {
+      refreshBadgeCounts();
+    }, 1200); // debounce 1.2s để tránh spam API
   };
 
   // Reaction handlers
@@ -809,6 +1018,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
       // console.log('[ChatScreen] Last message date:', sortedMessages[sortedMessages.length - 1]?.sentAt);
       
       setMessages(sortedMessages);
+      setVisibleMessageCount(Math.min(MESSAGES_PAGE_SIZE, sortedMessages.length));
       // Clear unread locally for this conversation
       setConversations((prev) => prev.map((c) => (c.id === conversationId ? ({ ...(c as any), unreadCount: 0 } as any) : c)));
       // Persist read override up to the last message time
@@ -872,6 +1082,15 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
       // Set empty messages array nếu lỗi
       setMessages([]);
     }
+  };
+
+  const handleLoadOlderMessages = () => {
+    if (!messages || messages.length === 0) return;
+    if (messages.length <= visibleMessageCount) return;
+    setVisibleMessageCount((prev) => {
+      const next = Math.min(prev + MESSAGES_PAGE_SIZE, messages.length);
+      return next;
+    });
   };
 
   const handleSendMessage = async () => {
@@ -1076,34 +1295,68 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
     }
 
     const previewText = (() => {
+      // 1) Ưu tiên cache đã có (được cập nhật realtime qua WebSocket)
       const viaMap = (convLastMessageMap[item.id] || '').trim();
       if (viaMap) return viaMap;
-      const lm: any = (item as any).lastMessage || {};
-      const candidates = [
-        String(lm.content ?? '').trim(),
-        String((item as any).lastMessageText ?? '').trim(),
-        String((item as any).lastMessagePreview ?? '').trim(),
-        String(lm.text ?? '').trim(),
-        String(lm?.metadata?.transcript ?? '').trim(),
-      ].filter(Boolean);
-      if (candidates.length > 0) return candidates[0];
+
+      // 2) Tìm lastMessage từ nhiều nguồn giống web CRM
+      const convAny: any = item as any;
+      let lm: any = convAny.lastMessage;
+      if (!lm && Array.isArray(convAny.messages) && convAny.messages.length > 0) {
+        lm = convAny.messages[convAny.messages.length - 1];
+      }
+
+      // Nếu vẫn không có message nào, fallback rỗng
+      if (!lm) {
+        return '';
+      }
+
+      // 3) Logic giống ChatWindow: ưu tiên text, bỏ placeholder
+      const raw = String(lm.content ?? '').trim();
+      const upper = raw.toUpperCase();
+      const isPlaceholder = [
+        '[PHOTO]',
+        '[VOICE]',
+        '[VIDEO]',
+        '[DOCUMENT]',
+        '[AUDIO]',
+        '[STICKER]',
+        '[IMAGE]',
+        '[FILE]',
+      ].includes(upper);
+
+      // Lấy danh sách file đính kèm nếu có
+      const files =
+        (lm.attachments as any)?.files ||
+        (lm.metadata as any)?.attachments?.files ||
+        [];
+
+      if (raw && !isPlaceholder) return raw;
+
+      if (Array.isArray(files) && files.length > 0) {
+        const f = files[0] as any;
+        const name =
+          f.originalName ||
+          f.fileName ||
+          f.file_url ||
+          'Tệp đính kèm';
+        return `📎 ${name}`;
+      }
+
+      // 4) Dựa vào contentType khi không có text/filename rõ ràng
       const ct = String(lm.contentType || '').toLowerCase();
       if (ct === 'image') return '[Ảnh]';
       if (ct === 'file') return '[Tệp]';
-      if (ct === 'voice') return '[Voice]';
+      if (ct === 'voice' || ct === 'audio') return '[Voice]';
       if (ct === 'email') return '[Email]';
-      if (lm?.attachments?.files?.length) return '[Tệp]';
-      if (isVisitorView) return 'Chat với khách truy cập website';
-      return `Chat với ${
-        (item.customer as any)?.phone ||
-        (item.customer as any)?.email ||
-        (item.customer as any)?.name ||
-        'khách hàng'
-      }`;
+
+      // Không còn fallback "Chat với khách hàng" để tránh bị sai nội dung
+      return '';
     })();
 
     const topLabels = topLabelsMap[item.id] || [];
     const extraCount = convExtraLabelsMap[item.id] || 0;
+    const unread = (item as any).unreadCount > 0;
     return (
       <TouchableOpacity
         style={[
@@ -1137,7 +1390,13 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
 
         <View style={styles.conversationContent}>
           <View style={styles.conversationHeader}>
-            <Text style={styles.customerName} numberOfLines={1}>
+            <Text
+              style={[
+                styles.customerName,
+                unread && styles.conversationUnreadTitle,
+              ]}
+              numberOfLines={1}
+            >
               {customerName}
             </Text>
             <Text style={styles.timestamp}>
@@ -1145,7 +1404,13 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
             </Text>
           </View>
           <View style={styles.conversationFooter}>
-            <Text style={styles.lastMessage} numberOfLines={1}>
+            <Text
+              style={[
+                styles.lastMessage,
+                unread && styles.conversationUnreadPreview,
+              ]}
+              numberOfLines={1}
+            >
               {previewText}
             </Text>
             {(item as any).unreadCount > 0 && (
@@ -1214,9 +1479,15 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
     );
   };
 
+  const displayedMessages = useMemo(() => {
+    if (!messages || messages.length === 0) return [] as Message[];
+    const start = Math.max(0, messages.length - visibleMessageCount);
+    return messages.slice(start);
+  }, [messages, visibleMessageCount]);
+
   const invertedMessages = useMemo(() => {
-    return [...messages].reverse();
-  }, [messages]);
+    return [...displayedMessages].reverse();
+  }, [displayedMessages]);
 
   // Conversation List View
   if (!selectedConversation) {
@@ -1483,7 +1754,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
   return (
     <KeyboardAvoidingView
       style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
     >
       {/* Chat Header */}
@@ -1589,6 +1860,8 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ onBack }) => {
         updateCellsBatchingPeriod={50}
         maintainVisibleContentPosition={{ minIndexForVisible: 1, autoscrollToTopThreshold: 50 } as any}
         scrollEventThrottle={16}
+        onEndReached={handleLoadOlderMessages}
+        onEndReachedThreshold={0.1}
         ListEmptyComponent={
           <View style={styles.emptyMessagesContainer}>
             <MaterialIcons name="chat-bubble-outline" size={64} color="#D1D5DB" />
@@ -2253,7 +2526,8 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 16,
     fontWeight: '600',
-    color: '#1F2937',
+    color: '#111827',
+    letterSpacing: 0.1,
   },
   timestamp: {
     fontSize: 12,
@@ -2269,6 +2543,17 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     color: '#6B7280',
+    letterSpacing: 0.1,
+  },
+  conversationUnreadTitle: {
+    fontWeight: '800',
+    color: '#0F172A',
+    letterSpacing: 0.15,
+  },
+  conversationUnreadPreview: {
+    fontWeight: '600',
+    color: '#111827',
+    letterSpacing: 0.12,
   },
   convLabelRow: {
     flexDirection: 'row',

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -15,14 +15,33 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigation } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const LoginScreen = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
-  const { login, isLoading } = useAuth();
+  const [rememberEmail, setRememberEmail] = useState(false);
+  const { login, isLoading: isLoginLoading } = useAuth();
   const navigation = useNavigation();
+  const isLoading = isLoginLoading;
+
+  // Load email đã lưu (nếu có) khi mở màn
+  useEffect(() => {
+    const loadRememberedEmail = async () => {
+      try {
+        const stored = await AsyncStorage.getItem('remembered_email');
+        if (stored) {
+          setEmail(stored);
+          setRememberEmail(true);
+        }
+      } catch {
+        // ignore
+      }
+    };
+    loadRememberedEmail();
+  }, []);
 
   const handleLogin = async () => {
     // console.log('[LoginScreen] 🔘 Nút đăng nhập được nhấn');
@@ -42,6 +61,14 @@ const LoginScreen = () => {
     try {
       // console.log('[LoginScreen] 📝 Gọi login từ AuthContext...');
       await login(email, password);
+      // Lưu hoặc xoá email tuỳ theo lựa chọn
+      try {
+        if (rememberEmail) {
+          await AsyncStorage.setItem('remembered_email', email);
+        } else {
+          await AsyncStorage.removeItem('remembered_email');
+        }
+      } catch {}
       // console.log('[LoginScreen] ✅ Login thành công! Navigation sẽ tự động xử lý.');
       // Navigation sẽ được xử lý tự động bởi App.tsx
     } catch (error: any) {
@@ -51,23 +78,25 @@ const LoginScreen = () => {
     }
   };
 
-  const handleAzureLogin = () => {
-    console.log('==================== [LoginScreen] Azure SSO ====================');
-    console.log('[LoginScreen] 👉 Nút "Đăng nhập với Azure AD" được ấn');
-    console.log('[LoginScreen] 🌐 Điều hướng sang màn hình SSOLogin (WebView)');
-    // Điều hướng sang màn hình WebView SSO
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (navigation as any).navigate('SSOLogin');
+  const handleAzureLogin = async () => {
+    // Chuyển sang màn hình WebView SSO, nơi web sẽ xử lý Azure SSO và trả token về app
+    navigation.navigate('SSOLogin' as never);
   };
 
   return (
-    <LinearGradient
-      colors={['#0EA5E9', '#3B82F6', '#8B5CF6']}
-      style={styles.container}
-    >
-      {/* Decorative background circles */}
-      <View pointerEvents="none" style={styles.backgroundDecorTop} />
-      <View pointerEvents="none" style={styles.backgroundDecorBottom} />
+    <View style={styles.container}>
+      {/* Decorative gradient background */}
+      <LinearGradient
+        colors={['#0f172a', '#0ea5e9', '#4f46e5']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={StyleSheet.absoluteFill}
+      />
+      <View pointerEvents="none" style={styles.heroGlowTop} />
+      <View pointerEvents="none" style={styles.heroGlowBottom} />
+      <View pointerEvents="none" style={styles.heroRing} />
+      <View pointerEvents="none" style={styles.heroCardShadow} />
+
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}
@@ -79,19 +108,49 @@ const LoginScreen = () => {
           {/* Logo và Title */}
           <View style={styles.header}>
             <View style={styles.logoContainer}>
-              <MaterialCommunityIcons name="chat-processing" size={48} color="#FFFFFF" />
+              <LinearGradient
+                colors={['#38bdf8', '#6366f1']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.logoGradient}
+              >
+                <MaterialCommunityIcons name="chat-processing" size={34} color="#FFFFFF" />
+              </LinearGradient>
             </View>
-            <View style={styles.brandBadge}>
-              <Text style={styles.brandBadgeText}>AI Agent Mobile</Text>
+            <View style={styles.badgeRow}>
+              <View style={styles.brandBadge}>
+                <Text style={styles.brandBadgeText}>AI Agent Mobile</Text>
+              </View>
+              <View style={styles.brandBadgeSecondary}>
+                <MaterialIcons name="verified" size={14} color="#10B981" />
+                <Text style={styles.brandBadgeSecondaryText}>Enterprise</Text>
+              </View>
             </View>
             <Text style={styles.title}>Social Media CRM</Text>
-            <Text style={styles.subtitle}>
-              Hệ thống AI quản trị mạng xã hội đa kênh
-            </Text>
+            <Text style={styles.subtitle}>Hệ thống AI quản trị mạng xã hội đa kênh</Text>
+
+            <View style={styles.metricsRow}>
+              <View style={styles.metricPill}>
+                <MaterialCommunityIcons name="shield-lock-outline" size={16} color="#10B981" />
+                <Text style={styles.metricText}>Bảo mật JWT</Text>
+              </View>
+              <View style={styles.metricPill}>
+                <MaterialCommunityIcons name="rocket-launch" size={16} color="#F59E0B" />
+                <Text style={styles.metricText}>Tốc độ cao</Text>
+              </View>
+              <View style={styles.metricPill}>
+                <MaterialCommunityIcons name="microsoft-azure" size={16} color="#2563EB" />
+                <Text style={styles.metricText}>Azure SSO</Text>
+              </View>
+            </View>
           </View>
 
           {/* Form Card */}
           <View style={styles.formCard}>
+            <LinearGradient
+              colors={['rgba(255,255,255,0.12)', 'rgba(255,255,255,0.02)']}
+              style={styles.cardBorder}
+            />
             <Text style={styles.formTitle}>Đăng nhập</Text>
 
             {/* Error Message */}
@@ -156,10 +215,30 @@ const LoginScreen = () => {
               </View>
             </View>
 
-            {/* Forgot Password */}
-            <TouchableOpacity style={styles.forgotPassword}>
-              <Text style={styles.forgotPasswordText}>Quên mật khẩu?</Text>
-            </TouchableOpacity>
+            {/* Remember email + Forgot Password */}
+            <View style={styles.rememberRow}>
+              <TouchableOpacity
+                style={styles.rememberToggle}
+                onPress={() => setRememberEmail(!rememberEmail)}
+                disabled={isLoading}
+              >
+                <View
+                  style={[
+                    styles.rememberCheckbox,
+                    rememberEmail && styles.rememberCheckboxActive,
+                  ]}
+                >
+                  {rememberEmail && (
+                    <MaterialIcons name="check" size={14} color="#FFFFFF" />
+                  )}
+                </View>
+                <Text style={styles.rememberLabel}>Ghi nhớ email</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.forgotPassword}>
+                <Text style={styles.forgotPasswordText}>Quên mật khẩu?</Text>
+              </TouchableOpacity>
+            </View>
 
             {/* Login Button */}
             <TouchableOpacity
@@ -168,7 +247,7 @@ const LoginScreen = () => {
               disabled={isLoading}
             >
               <LinearGradient
-                colors={['#3B82F6', '#8B5CF6']}
+                colors={['#2563EB', '#7C3AED']}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 0 }}
                 style={styles.loginButtonGradient}
@@ -208,115 +287,185 @@ const LoginScreen = () => {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
-    </LinearGradient>
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    paddingHorizontal: 18,
   },
-  keyboardView: {
-    flex: 1,
-  },
+  keyboardView: { flex: 1 },
   scrollContent: {
     flexGrow: 1,
     justifyContent: 'center',
-    padding: 24,
+    paddingVertical: 28,
     alignItems: 'center',
   },
-  backgroundDecorTop: {
+  heroGlowTop: {
     position: 'absolute',
-    top: -40,
-    right: -40,
-    width: 160,
-    height: 160,
-    borderRadius: 80,
-    backgroundColor: 'rgba(255, 255, 255, 0.18)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.18,
-    shadowRadius: 20,
+    top: -120,
+    right: -60,
+    width: 260,
+    height: 260,
+    borderRadius: 130,
+    backgroundColor: '#38bdf8',
+    opacity: 0.25,
   },
-  backgroundDecorBottom: {
+  heroGlowBottom: {
     position: 'absolute',
-    bottom: -60,
-    left: -60,
-    width: 200,
-    height: 200,
-    borderRadius: 100,
-    backgroundColor: 'rgba(15, 23, 42, 0.12)',
+    bottom: -140,
+    left: -80,
+    width: 280,
+    height: 280,
+    borderRadius: 140,
+    backgroundColor: '#6366f1',
+    opacity: 0.25,
+  },
+  heroRing: {
+    position: 'absolute',
+    top: 80,
+    right: 10,
+    width: 180,
+    height: 180,
+    borderRadius: 90,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.18)',
+  },
+  heroCardShadow: {
+    position: 'absolute',
+    top: 180,
+    alignSelf: 'center',
+    width: '80%',
+    height: 60,
+    backgroundColor: '#000',
+    opacity: 0.15,
+    borderRadius: 30,
   },
   header: {
     alignItems: 'center',
-    marginBottom: 32,
+    marginBottom: 28,
+    width: '100%',
+    maxWidth: 430,
   },
   logoContainer: {
-    width: 80,
-    height: 80,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    width: 82,
+    height: 82,
+    borderRadius: 24,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 16,
-    borderWidth: 2,
-    borderColor: 'rgba(255, 255, 255, 0.3)',
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
   },
-  logoText: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
+  logoGradient: {
+    width: 62,
+    height: 62,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
+  badgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
     marginBottom: 8,
-    textAlign: 'center',
-  },
-  subtitle: {
-    fontSize: 14,
-    color: 'rgba(255, 255, 255, 0.9)',
-    textAlign: 'center',
-    paddingHorizontal: 32,
   },
   brandBadge: {
-    marginBottom: 8,
     paddingHorizontal: 14,
-    paddingVertical: 6,
+    paddingVertical: 7,
     borderRadius: 999,
-    backgroundColor: 'rgba(15, 23, 42, 0.16)',
+    backgroundColor: 'rgba(255,255,255,0.12)',
     borderWidth: 1,
-    borderColor: 'rgba(148, 163, 184, 0.6)',
+    borderColor: 'rgba(255,255,255,0.18)',
   },
   brandBadgeText: {
     fontSize: 11,
     letterSpacing: 0.5,
-    color: 'rgba(249, 250, 251, 0.95)',
-    fontWeight: '600',
+    color: '#E0E7FF',
+    fontWeight: '700',
     textTransform: 'uppercase',
   },
-  formCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 24,
-    padding: 24,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.18,
-    shadowRadius: 24,
-    elevation: 8,
-    width: '100%',
-    maxWidth: 420,
+  brandBadgeSecondary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
     borderWidth: 1,
-    borderColor: 'rgba(226, 232, 240, 0.9)',
-    backgroundColor: 'rgba(255, 255, 255, 0.98)',
+    borderColor: 'rgba(16, 185, 129, 0.25)',
+  },
+  brandBadgeSecondaryText: {
+    color: '#D1FAE5',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  title: {
+    fontSize: 30,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    marginBottom: 6,
+    textAlign: 'center',
+    letterSpacing: 0.2,
+  },
+  subtitle: {
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.85)',
+    textAlign: 'center',
+    paddingHorizontal: 36,
+  },
+  metricsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginTop: 14,
+  },
+  metricPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+  },
+  metricText: {
+    color: '#E5E7EB',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  formCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.97)',
+    borderRadius: 26,
+    padding: 24,
+    width: '100%',
+    maxWidth: 430,
+    borderWidth: 1,
+    borderColor: 'rgba(226, 232, 240, 0.6)',
+    overflow: 'hidden',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.24,
+    shadowRadius: 30,
+    elevation: 10,
+  },
+  cardBorder: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 26,
   },
   formTitle: {
     fontSize: 24,
-    fontWeight: 'bold',
-    color: '#1F2937',
-    marginBottom: 24,
+    fontWeight: '800',
+    color: '#0F172A',
+    marginBottom: 22,
     textAlign: 'center',
+    letterSpacing: 0.3,
   },
   errorContainer: {
     flexDirection: 'row',
@@ -336,51 +485,88 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   inputContainer: {
-    marginBottom: 20,
+    marginBottom: 18,
   },
   label: {
     fontSize: 14,
-    fontWeight: '600',
-    color: '#374151',
+    fontWeight: '700',
+    color: '#0F172A',
     marginBottom: 8,
+    letterSpacing: 0.2,
   },
   inputWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#F9FAFB',
-    borderRadius: 12,
+    borderRadius: 14,
     borderWidth: 1,
     borderColor: '#E5E7EB',
     paddingHorizontal: 12,
+    height: 54,
   },
   inputIcon: {
     marginRight: 12,
   },
   input: {
     flex: 1,
-    height: 50,
+    height: 52,
     fontSize: 16,
-    color: '#1F2937',
+    color: '#111827',
   },
   eyeIcon: {
     padding: 8,
   },
   forgotPassword: {
     alignSelf: 'flex-end',
-    marginBottom: 24,
-  },
-  forgotPasswordText: {
-    fontSize: 14,
-    color: '#3B82F6',
-    fontWeight: '600',
-  },
-  loginButton: {
-    borderRadius: 12,
-    overflow: 'hidden',
     marginBottom: 20,
   },
+  forgotPasswordText: {
+    fontSize: 13,
+    color: '#2563EB',
+    fontWeight: '700',
+  },
+  rememberRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 20,
+  },
+  rememberToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  rememberCheckbox: {
+    width: 18,
+    height: 18,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#CBD5F5',
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
+  },
+  rememberCheckboxActive: {
+    backgroundColor: '#2563EB',
+    borderColor: '#2563EB',
+  },
+  rememberLabel: {
+    fontSize: 13,
+    color: '#4B5563',
+    fontWeight: '500',
+  },
+  loginButton: {
+    borderRadius: 14,
+    overflow: 'hidden',
+    marginBottom: 16,
+    shadowColor: '#1E3A8A',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 14,
+    elevation: 6,
+  },
   loginButtonDisabled: {
-    opacity: 0.6,
+    opacity: 0.7,
   },
   loginButtonGradient: {
     paddingVertical: 16,
@@ -390,12 +576,13 @@ const styles = StyleSheet.create({
   loginButtonText: {
     color: '#FFFFFF',
     fontSize: 16,
-    fontWeight: 'bold',
+    fontWeight: '800',
+    letterSpacing: 0.4,
   },
   divider: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginVertical: 20,
+    marginVertical: 18,
   },
   dividerLine: {
     flex: 1,
@@ -404,37 +591,43 @@ const styles = StyleSheet.create({
   },
   dividerText: {
     marginHorizontal: 16,
-    fontSize: 14,
+    fontSize: 13,
     color: '#6B7280',
+    fontWeight: '600',
   },
   ssoButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#F9FAFB',
-    borderRadius: 12,
+    borderRadius: 14,
     borderWidth: 1,
     borderColor: '#E5E7EB',
     paddingVertical: 14,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 3,
   },
   ssoIcon: {
-    marginRight: 12,
+    marginRight: 10,
   },
   ssoButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#374151',
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#1F2937',
   },
   footer: {
     marginTop: 24,
     alignItems: 'center',
   },
   footerText: {
-    fontSize: 14,
-    color: 'rgba(255, 255, 255, 0.9)',
+    fontSize: 13,
+    color: 'rgba(255, 255, 255, 0.85)',
   },
   footerLink: {
-    fontWeight: 'bold',
+    fontWeight: '800',
     textDecorationLine: 'underline',
   },
 });

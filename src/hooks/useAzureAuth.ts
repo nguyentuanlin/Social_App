@@ -2,13 +2,14 @@ import { useEffect, useState } from 'react';
 import * as AuthSession from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import { authService } from '../services/authService';
+import { useAuth } from '../contexts/AuthContext';
 
 // Hoàn thành WebBrowser session khi component unmount
 WebBrowser.maybeCompleteAuthSession();
 
 // Azure AD Configuration
-const AZURE_TENANT_ID = '67f466ec-d460-4f90-9465-f88465e460ef';
-const AZURE_CLIENT_ID = '0f263b0c-86ad-46c8-a583-0381ec2c8be3';
+const AZURE_TENANT_ID = process.env.EXPO_PUBLIC_AZURE_AD_TENANT_ID || '67f466ec-d460-4f90-9465-f88465e460ef';
+const AZURE_CLIENT_ID = process.env.EXPO_PUBLIC_AZURE_AD_CLIENT_ID || 'a1722b59-b11d-4113-8a96-4d18ebf3e6c1';
 
 // Discovery document cho Azure AD
 const discovery = {
@@ -19,10 +20,15 @@ const discovery = {
 export const useAzureAuth = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { completeSsoLogin } = useAuth();
 
   // Tạo redirect URI
+  const redirectScheme = process.env.EXPO_PUBLIC_AZURE_AD_REDIRECT_SCHEME || 'socialapp';
+  const redirectPath = process.env.EXPO_PUBLIC_AZURE_AD_REDIRECT_PATH || 'redirect';
+
   const redirectUri = AuthSession.makeRedirectUri({
-    scheme: 'socialapp',
+    scheme: redirectScheme,
+    path: redirectPath,
   });
 
   console.log('[Azure Auth] Redirect URI:', redirectUri);
@@ -75,11 +81,10 @@ export const useAzureAuth = () => {
       if (tokenResponse.accessToken) {
         // Gọi backend để exchange Azure token thành JWT của hệ thống
         await authService.exchangeSsoToken('azure', tokenResponse.accessToken);
-        
-        // Lấy profile
-        await authService.getProfile();
-        
-        // AuthContext sẽ tự động update và navigate
+
+        // Lấy profile và cập nhật AuthContext để app native trở thành chủ phiên
+        const profile = await authService.getProfile();
+        await completeSsoLogin(profile);
       }
     } catch (err: any) {
       console.error('Azure auth error:', err);

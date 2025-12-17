@@ -13,7 +13,7 @@
       "expo-asset"
     ],
     "splash": {
-      "image": "./assets/splash.png",
+      "image": "./assets/icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
@@ -30,7 +30,12 @@
     },
     "android": {
       "package": "com.tll.socialapp",
-      "newArchEnabled": false
+      "newArchEnabled": false,
+      "softwareKeyboardLayoutMode": "resize",
+      "adaptiveIcon": {
+        "foregroundImage": "assets/icon.png",
+        "backgroundColor": "#ffffff"
+      }
     },
     "web": {},
     "extra": {
